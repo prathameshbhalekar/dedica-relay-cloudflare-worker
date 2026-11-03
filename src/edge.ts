@@ -71,7 +71,8 @@ export class Edge {
       return null;
     });
     if (served) return served;
-    return this.originFetch(request);
+    // A bound upstream Worker (see Env.UPSTREAM) stands in for the origin.
+    return env.UPSTREAM ? env.UPSTREAM.fetch(request) : this.originFetch(request);
   }
 
   private queryProxyFor(env: Env) {

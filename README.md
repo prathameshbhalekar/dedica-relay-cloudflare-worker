@@ -35,6 +35,25 @@ this directory at `HEAD`, never the monorepo's history).
 Secrets the button asks for come from `.dev.vars.example`; the descriptions it shows come from `cloudflare.bindings`
 in `package.json`.
 
+### Your site already has a Worker on its route
+
+Cloudflare runs one route Worker per request, and only one Worker can own a route pattern (adding the same
+pattern fails with "Failed to add domain"). To keep your existing Worker, chain it behind this one:
+
+1. Add a service binding named `UPSTREAM` to your existing Worker, in this worker's `wrangler.toml` (a binding
+   added only in the dashboard is removed by the next `wrangler deploy`):
+
+   ```toml
+   [[services]]
+   binding = "UPSTREAM"
+   service = "your-existing-worker"
+   ```
+
+2. Move the route (e.g. `example.com/*`) from your existing Worker to this one.
+
+Everything Dedica doesn't answer then goes to your existing Worker, which runs as before. One exception:
+if this worker itself throws, Cloudflare skips it and goes straight to your origin.
+
 ### By hand
 
 1. In Dedica, start onboarding, then create a middleware token
