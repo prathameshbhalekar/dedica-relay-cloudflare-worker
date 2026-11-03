@@ -1,0 +1,375 @@
+{
+  "schemaVersion": 1,
+  "ttlSeconds": 30,
+  "siteId": "00000000-0000-4000-8000-000000000001",
+  "mode": "autopilot",
+  "detection": {
+    "traditionalBots": [
+      "adidxbot",
+      "adsbot-google",
+      "applebot",
+      "baiduspider",
+      "better uptime bot",
+      "betterstack",
+      "bingbot",
+      "bingpreview",
+      "chrome-lighthouse",
+      "datadogsynthetics",
+      "discordbot",
+      "duckduckbot",
+      "embedly",
+      "facebookcatalog",
+      "facebookexternalhit",
+      "google-inspectiontool",
+      "googlebot",
+      "gtmetrix",
+      "linkedinbot",
+      "mediapartners-google",
+      "naverbot",
+      "newrelic-synthetics",
+      "newrelicpinger",
+      "pingdom",
+      "pinterest/",
+      "pinterestbot",
+      "redditbot",
+      "seznambot",
+      "site24x7",
+      "skypeuripreview",
+      "slack-imgproxy",
+      "slackbot",
+      "statuscake",
+      "storebot-google",
+      "telegrambot",
+      "twitterbot",
+      "uptimerobot",
+      "whatsapp/",
+      "yahoo! slurp",
+      "yandex.com/bots",
+      "yandexbot",
+      "yeti/"
+    ],
+    "traditionalBotsExact": [],
+    "agentUa": [
+      "amazonbot",
+      "anthropic-ai",
+      "applebot-extended",
+      "bytespider",
+      "ccbot",
+      "chatgpt agent",
+      "chatgpt-user",
+      "claude-searchbot",
+      "claude-user",
+      "claude-web",
+      "claudebot",
+      "cohere-ai",
+      "diffbot",
+      "duckassistbot",
+      "gemini-deep-research",
+      "google-agent",
+      "google-extended",
+      "gptbot",
+      "meta-externalagent",
+      "meta-externalfetcher",
+      "mistralai-user",
+      "oai-searchbot",
+      "perplexity-user",
+      "perplexitybot",
+      "youbot"
+    ],
+    "agentUaExact": [],
+    "signatureAgentDomains": [
+      "chatgpt.com"
+    ],
+    "botLikePattern": "bot\\b|bot/|crawl|spider|scrap|fetcher|agent\\b|python-|python/|httpx|aiohttp|axios|node-fetch|undici|go-http-client|okhttp|java/|libwww|headless|phantomjs|playwright|puppeteer",
+    "humanPageVeto": {
+      "exact": [],
+      "contains": [
+        [
+          "google-inspectiontool",
+          "human"
+        ],
+        [
+          "gemini-deep-research",
+          "agent"
+        ],
+        [
+          "mediapartners-google",
+          "human"
+        ],
+        [
+          "meta-externalfetcher",
+          "agent"
+        ],
+        [
+          "facebookexternalhit",
+          "human"
+        ],
+        [
+          "newrelic-synthetics",
+          "human"
+        ],
+        [
+          "meta-externalagent",
+          "agent"
+        ],
+        [
+          "applebot-extended",
+          "agent"
+        ],
+        [
+          "better uptime bot",
+          "human"
+        ],
+        [
+          "chrome-lighthouse",
+          "human"
+        ],
+        [
+          "datadogsynthetics",
+          "human"
+        ],
+        [
+          "claude-searchbot",
+          "agent"
+        ],
+        [
+          "facebookcatalog",
+          "human"
+        ],
+        [
+          "google-extended",
+          "agent"
+        ],
+        [
+          "perplexity-user",
+          "agent"
+        ],
+        [
+          "skypeuripreview",
+          "human"
+        ],
+        [
+          "storebot-google",
+          "human"
+        ],
+        [
+          "yandex.com/bots",
+          "human"
+        ],
+        [
+          "mistralai-user",
+          "agent"
+        ],
+        [
+          "newrelicpinger",
+          "human"
+        ],
+        [
+          "slack-imgproxy",
+          "human"
+        ],
+        [
+          "adsbot-google",
+          "human"
+        ],
+        [
+          "chatgpt agent",
+          "agent"
+        ],
+        [
+          "duckassistbot",
+          "agent"
+        ],
+        [
+          "oai-searchbot",
+          "agent"
+        ],
+        [
+          "perplexitybot",
+          "agent"
+        ],
+        [
+          "anthropic-ai",
+          "agent"
+        ],
+        [
+          "chatgpt-user",
+          "agent"
+        ],
+        [
+          "google-agent",
+          "agent"
+        ],
+        [
+          "pinterestbot",
+          "human"
+        ],
+        [
+          "yahoo! slurp",
+          "human"
+        ],
+        [
+          "baiduspider",
+          "human"
+        ],
+        [
+          "betterstack",
+          "human"
+        ],
+        [
+          "bingpreview",
+          "human"
+        ],
+        [
+          "claude-user",
+          "agent"
+        ],
+        [
+          "duckduckbot",
+          "human"
+        ],
+        [
+          "linkedinbot",
+          "human"
+        ],
+        [
+          "telegrambot",
+          "human"
+        ],
+        [
+          "uptimerobot",
+          "human"
+        ],
+        [
+          "bytespider",
+          "agent"
+        ],
+        [
+          "claude-web",
+          "agent"
+        ],
+        [
+          "discordbot",
+          "human"
+        ],
+        [
+          "pinterest/",
+          "human"
+        ],
+        [
+          "statuscake",
+          "human"
+        ],
+        [
+          "twitterbot",
+          "human"
+        ],
+        [
+          "amazonbot",
+          "agent"
+        ],
+        [
+          "claudebot",
+          "agent"
+        ],
+        [
+          "cohere-ai",
+          "agent"
+        ],
+        [
+          "googlebot",
+          "human"
+        ],
+        [
+          "redditbot",
+          "human"
+        ],
+        [
+          "seznambot",
+          "human"
+        ],
+        [
+          "whatsapp/",
+          "human"
+        ],
+        [
+          "yandexbot",
+          "human"
+        ],
+        [
+          "adidxbot",
+          "human"
+        ],
+        [
+          "applebot",
+          "human"
+        ],
+        [
+          "gtmetrix",
+          "human"
+        ],
+        [
+          "naverbot",
+          "human"
+        ],
+        [
+          "site24x7",
+          "human"
+        ],
+        [
+          "slackbot",
+          "human"
+        ],
+        [
+          "bingbot",
+          "human"
+        ],
+        [
+          "diffbot",
+          "agent"
+        ],
+        [
+          "embedly",
+          "human"
+        ],
+        [
+          "pingdom",
+          "human"
+        ],
+        [
+          "gptbot",
+          "agent"
+        ],
+        [
+          "youbot",
+          "agent"
+        ],
+        [
+          "ccbot",
+          "agent"
+        ],
+        [
+          "yeti/",
+          "human"
+        ]
+      ],
+      "botLikePattern": "bot\\b|bot/|crawl|spider|slurp"
+    }
+  },
+  "twins": {
+    "enabled": true,
+    "negotiate": true,
+    "suffix": ".md",
+    "includePaths": [],
+    "excludePaths": [],
+    "questionParams": []
+  },
+  "artifacts": [],
+  "serve": {
+    "baseUrl": "https://api.dedica.test/api/v1/middleware/serve/",
+    "version": "aebe14d8654fdcaa"
+  },
+  "query": null,
+  "queryAvailability": {},
+  "version": "aebe14d8654fdcaa"
+}

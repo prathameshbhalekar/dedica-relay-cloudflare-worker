@@ -1,0 +1,20 @@
+name = "dedica-middleware"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+# Route the worker in front of your site in the Cloudflare dashboard (or add `routes` here), e.g.
+# routes = [{ pattern = "example.com/*", zone_name = "example.com" }]
+
+# Heartbeat to Dedica every 5 minutes (policy fetches count as heartbeats too, but a quiet site has none).
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+# Your site id from Dedica (onboarding -> middleware). Not a secret.
+DEDICA_SITE_ID = ""
+DEDICA_API_URL = "https://api.getdedica.com"
+# Optional: the only origin /ask and /mcp may be proxied to (defaults to DEDICA_API_URL's origin).
+# DEDICA_QUERY_ORIGIN = ""
+
+# Secret, never in this file:  npx wrangler secret put DEDICA_MIDDLEWARE_TOKEN
+# Local development: put DEDICA_MIDDLEWARE_TOKEN=... in .dev.vars (gitignored).

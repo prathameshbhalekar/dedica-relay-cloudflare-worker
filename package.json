@@ -1,0 +1,32 @@
+{
+  "name": "dedica-middleware-cloudflare-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reference Dedica middleware for Cloudflare Workers (protocol v1): policy, agent detection, serving from Dedica with origin fallback.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261019.1",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.0.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DEDICA_SITE_ID": {
+        "description": "Your site id: Dedica → onboarding → **Install the Dedica middleware** → **Site id**."
+      },
+      "DEDICA_API_URL": {
+        "description": "Dedica's API. Keep `https://api.getdedica.com` unless Dedica tells you otherwise."
+      },
+      "DEDICA_MIDDLEWARE_TOKEN": {
+        "description": "Your middleware token (starts with `dm_`): Dedica → onboarding → **Create token**. It is shown once."
+      }
+    }
+  }
+}

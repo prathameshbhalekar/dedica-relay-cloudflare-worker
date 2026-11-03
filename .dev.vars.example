@@ -1,0 +1,3 @@
+# Secrets (never commit real values). Copy to .dev.vars for `wrangler dev`.
+# The Deploy to Cloudflare button asks for these during setup.
+DEDICA_MIDDLEWARE_TOKEN=dm_your_token_here
