@@ -42,16 +42,6 @@ describe("connectivity", () => {
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.0.0" });
   });
 
-  it("hands what Dedica doesn't answer to a bound upstream Worker instead of the origin", async () => {
-    const { edge, originCalls } = harness();
-    const upstreamCalls: Request[] = [];
-    const upstream = { fetch: async (request: Request) => (upstreamCalls.push(request), new Response("upstream page")) };
-    const res = await edge.fetch(get("/pricing", browserHeaders), { ...env, UPSTREAM: upstream }, new FakeCtx());
-    expect(await res.text()).toBe("upstream page");
-    expect(upstreamCalls).toHaveLength(1);
-    expect(originCalls).toHaveLength(0);
-  });
-
   it("passes everything through when not configured", async () => {
     const { edge, calls, originCalls } = harness();
     await edge.fetch(get("/pricing.md", { "user-agent": GPTBOT_UA }), { ...env, DEDICA_MIDDLEWARE_TOKEN: "" }, new FakeCtx());

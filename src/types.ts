@@ -10,12 +10,6 @@ export interface Env {
   DEDICA_POLICY_URL?: string;
   /** Optional pin: the only origin /ask and /mcp may be proxied to. Defaults to DEDICA_API_URL's origin. */
   DEDICA_QUERY_ORIGIN?: string;
-  /**
-   * Optional service binding to another Worker that should run after this one (e.g. one already on
-   * your site's route). Everything Dedica doesn't answer goes to it instead of straight to the origin.
-   * Cloudflare runs one route Worker per request, and a plain fetch to a same-zone Worker fails.
-   */
-  UPSTREAM?: { fetch(request: Request): Promise<Response> };
 }
 
 /** Minimal slice of ExecutionContext the worker uses (lets tests pass a plain object). */
