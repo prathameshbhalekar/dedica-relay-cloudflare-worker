@@ -14,7 +14,7 @@ import {
   configured,
   heartbeatUrl,
 } from "./env";
-import { type Trace, buildEvent, newTrace, sendEvent } from "./analytics";
+import { Reporter, type Trace, buildEvent, isReportable, newTrace } from "./analytics";
 import { detectAgent, isTraditionalBot, keepHumanPage, needsPolicy, twinEligible, userAgent } from "./detect";
 import { type FetchFn, PolicyStore } from "./policy";
 import { proxyRequest } from "./proxy";
@@ -32,6 +32,8 @@ export interface EdgeOptions {
   /** Calls to the customer's origin. */
   originFetch?: (request: Request) => Promise<Response>;
   now?: () => number;
+  /** Waits before a traffic batch is sent (tests pass one that doesn't wait). */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** All per-isolate state of the worker. Tests build their own; the deployed worker uses one. */
@@ -41,6 +43,7 @@ export class Edge {
   private readonly dedicaFetch: FetchFn;
   private readonly originFetch: (request: Request) => Promise<Response>;
   private readonly now: () => number;
+  readonly reporter: Reporter;
 
   constructor(options: EdgeOptions = {}) {
     this.dedicaFetch = options.dedicaFetch ?? ((input, init) => fetch(input, init));
@@ -48,6 +51,7 @@ export class Edge {
     this.now = options.now ?? Date.now;
     this.policies = new PolicyStore(this.dedicaFetch, this.now);
     this.server = new Server(this.dedicaFetch, this.now);
+    this.reporter = new Reporter(this.dedicaFetch, options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))));
   }
 
   async fetch(request: Request, env: Env, ctx: Ctx): Promise<Response> {
@@ -95,13 +99,17 @@ export class Edge {
     }
   }
 
-  /** Reports the request to Dedica in the background (agents, bots and anything Dedica answered). Never throws. */
+  /** Reports the request to Dedica in the background, batched (see analytics.ts). Never throws. */
   private report(request: Request, response: Response, env: Env, ctx: Ctx, trace: Trace, startedAt: number): void {
     try {
+      if (!configured(env) || request.headers.get(ORIGIN_FETCH_HEADER) === "1") return;
+      if (!isReportable(new URL(request.url), request.headers)) return;
       const p = this.policies.policy;
-      if (!p || !configured(env) || request.headers.get(ORIGIN_FETCH_HEADER) === "1") return;
-      const event = buildEvent(request, response, trace, p, startedAt, this.now());
-      if (event) ctx.waitUntil(sendEvent(event, env, this.dedicaFetch));
+      ctx.waitUntil(
+        buildEvent(request, response, trace, p, env, startedAt, this.now())
+          .then((event) => this.reporter.add(event, env, ctx))
+          .catch((error: unknown) => console.warn(`[dedica] event report skipped: ${error}`)),
+      );
     } catch (error) {
       console.warn(`[dedica] event report skipped: ${error}`);
     }

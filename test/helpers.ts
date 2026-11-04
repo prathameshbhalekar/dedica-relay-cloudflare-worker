@@ -28,8 +28,13 @@ export class FakeCtx implements Ctx {
     this.pending.push(promise.catch(() => {}));
   }
   passThroughOnException(): void {}
+  /** Waits for all background work, including work queued by background work (a scheduled batch flush). */
   async drain(): Promise<void> {
-    await Promise.all(this.pending);
+    let settled = -1;
+    while (settled !== this.pending.length) {
+      settled = this.pending.length;
+      await Promise.all(this.pending);
+    }
   }
 }
 
@@ -42,7 +47,14 @@ type Handler = (url: URL, init?: RequestInit) => Response | Promise<Response>;
 
 /** An Edge whose Dedica and origin calls are fakes. Dedica's policy is `current`, served by default. */
 export function harness(
-  options: { policy?: Policy | null; serve?: Handler; origin?: (request: Request) => Response; now?: () => number; events?: Handler } = {},
+  options: {
+    policy?: Policy | null;
+    serve?: Handler;
+    origin?: (request: Request) => Response;
+    now?: () => number;
+    events?: Handler;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
 ) {
   const calls: Call[] = [];
   const originCalls: Request[] = [];
@@ -51,6 +63,7 @@ export function harness(
   const state = { policy: options.policy === undefined ? policy() : options.policy, policyStatus: 200 };
   const edge = new Edge({
     now: options.now,
+    sleep: options.sleep ?? (() => Promise.resolve()),
     dedicaFetch: async (input, init) => {
       const url = new URL(input);
       if (url.pathname === "/api/v1/middleware/events/") {
@@ -88,7 +101,12 @@ export function header(call: Call, name: string): string | undefined {
   return (call.init?.headers as Record<string, string> | undefined)?.[name];
 }
 
-/** The bodies of reported traffic events. */
+/** Every reported traffic event, across batches (each batch is NDJSON). */
 export function eventBodies(events: Call[]): Record<string, unknown>[] {
-  return events.map((e) => JSON.parse(String(e.init?.body)) as Record<string, unknown>);
+  return events.flatMap((e) =>
+    String(e.init?.body)
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>),
+  );
 }

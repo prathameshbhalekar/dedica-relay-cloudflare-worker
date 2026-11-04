@@ -12,20 +12,27 @@ What it does:
   discovery files (`/openapi.json`, `/.well-known/ard.json`, ...) only where your origin has none, gives
   agents a markdown body on your 404s, and proxies `/ask` (GET, and NLWeb POST) and `/mcp` once Dedica
   enables them. In `report` mode it passes everything through;
-- reports agent traffic to Dedica (protocol section 7, see below).
+- reports page loads (people, agents and bots) to Dedica in batches (protocol section 7, see below).
 
 **Fail-safe:** people, browsers and search engines always get your normal page; every call to Dedica
 has a timeout; anything unexpected (Dedica slow, down, no content for a path) falls back to your origin.
 
 ## Traffic reporting
 
-For every request from an AI agent or a bot (search engine, link preview, monitor, unknown crawler), and every request
-Dedica answered (`.md`, managed files, `/mcp`, `/ask`, the agent 404), the worker POSTs one event to
-`/api/v1/middleware/events/` in the background (`src/analytics.ts`): time, method, host, path, status, latency, what it
-did (`outcome`), whether Dedica served it, the matched agent, the user agent (truncated) and Cloudflare's country.
+The worker reports every page load to Dedica, from people, AI agents and bots alike (`src/analytics.ts`), so Dedica can
+show how much of your traffic is agents. Static files, a page's sub-requests (images, scripts, XHR) and prefetches are
+not reported, and neither is Dedica's own crawler.
 
-It never delays or changes a response, gives up after 3 s, and only logs a failure. It never sends a person's page
-view, an IP address, the query string, cookies or the token, and never reports Dedica's own crawler.
+Events are batched per worker instance and sent in the background as NDJSON to `/api/v1/middleware/events/`: at 1000
+events, or 5 seconds after the first. A batch Dedica can't take right now is retried with the next one (up to 5000
+events). Reporting never delays or changes a response.
+
+What's in an event: time, method, host, path, status, latency, what the worker did (`outcome`), whether Dedica served
+it, the recognised agent, the user agent, the referer's origin and path, the country, a few request headers
+(`accept`, `accept-language`, `sec-fetch-*`) and only the attribution query parameters (`utm_*`, `ref`, `source`) plus
+the questions your policy declares. **Never** an IP address, cookies, the full query string or the token: a visitor is
+a daily pseudonym (SHA-256 of IP, user agent, day and a secret salt). Set your own salt with
+`npx wrangler secret put DEDICA_SALT`; without it the middleware token is used, which Dedica only stores hashed.
 
 ## Install
 

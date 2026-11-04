@@ -10,6 +10,8 @@ export interface Env {
   DEDICA_POLICY_URL?: string;
   /** Optional pin: the only origin /ask and /mcp may be proxied to. Defaults to DEDICA_API_URL's origin. */
   DEDICA_QUERY_ORIGIN?: string;
+  /** Optional secret: salt for the daily visitor pseudonym in traffic reports. Defaults to the middleware token. */
+  DEDICA_SALT?: string;
 }
 
 /** Minimal slice of ExecutionContext the worker uses (lets tests pass a plain object). */

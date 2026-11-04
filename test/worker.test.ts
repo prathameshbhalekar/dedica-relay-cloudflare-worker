@@ -24,7 +24,7 @@ describe("connectivity", () => {
   it("serves the well-known file without calling Dedica", async () => {
     const { edge, calls } = harness();
     const res = await edge.fetch(get("/.well-known/dedica.json"), env, new FakeCtx());
-    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.2.0" });
+    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.3.0" });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(calls).toHaveLength(0);
   });
@@ -41,7 +41,7 @@ describe("connectivity", () => {
     await edge.heartbeat(env);
     expect(calls[0].url).toBe(`${API}/api/v1/middleware/heartbeat/`);
     expect(header(calls[0], "x-dedica-middleware-token")).toBe("dm_test");
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.2.0" });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.3.0" });
   });
 
   it("passes everything through when not configured", async () => {
@@ -369,24 +369,29 @@ describe("proxied paths", () => {
 });
 
 describe("traffic reporting", () => {
-  /** Handles one request on a warm isolate (policy loaded) and returns the reported events after the background work. */
-  async function reported(request: Request, options: Parameters<typeof harness>[0] = {}) {
+  /** Handles requests on a warm isolate (policy loaded) and returns what was reported once the background work is done. */
+  async function reported(requests: Request | Request[], options: Parameters<typeof harness>[0] = {}) {
     const h = harness({ serve: () => markdown(), ...options });
     await h.edge.policies.refresh(env);
     const ctx = new FakeCtx();
-    const res = await h.edge.fetch(request, env, ctx);
+    const responses: Response[] = [];
+    for (const request of Array.isArray(requests) ? requests : [requests]) responses.push(await h.edge.fetch(request, env, ctx));
     await ctx.drain();
-    return { res, events: eventBodies(h.events), raw: h.events };
+    return { res: responses[0], events: eventBodies(h.events), raw: h.events, edge: h.edge };
   }
 
-  it("reports an agent reading a markdown page, without the query string or secrets", async () => {
-    const { events, raw } = await reported(get("/pricing.md?utm=x&email=a@b.c", { "user-agent": GPTBOT_UA, cookie: "session=1" }));
+  const visitor = (extra: Record<string, string> = {}) => ({ ...browserHeaders, "cf-connecting-ip": "203.0.113.7", ...extra });
+
+  it("reports an agent reading a markdown page, keeping only attribution parameters", async () => {
+    const { events, raw } = await reported(
+      get("/pricing.md?utm_source=chatgpt.com&email=a@b.c&ref=answer", { "user-agent": GPTBOT_UA, cookie: "session=1" }),
+    );
     expect(events).toHaveLength(1);
-    const event = events[0];
-    expect(event).toMatchObject({
+    expect(events[0]).toMatchObject({
       method: "GET",
       host: "shop.example",
       path: "/pricing.md",
+      query: "?utm_source=chatgpt.com&ref=answer",
       status: 200,
       outcome: "twin",
       served_by_dedica: true,
@@ -394,80 +399,125 @@ describe("traffic reporting", () => {
       client: { kind: "ai_agent", matched: "gptbot", signature_agent: null },
       mode: "autopilot",
       policy_version: policy().version,
-      country: null,
     });
-    expect(String(event.user_agent)).toContain("GPTBot");
+    expect(typeof events[0].id).toBe("string");
     const body = String(raw[0].init?.body);
-    expect(body).not.toContain("utm");
-    expect(body).not.toContain("session=1");
-    expect(body).not.toContain("dm_test");
+    for (const secret of ["a@b.c", "session=1", "dm_test"]) expect(body).not.toContain(secret);
     expect(raw[0].url).toBe(`${API}/api/v1/middleware/events/`);
+    expect(header(raw[0], "content-type")).toBe("application/x-ndjson");
     expect(header(raw[0], "x-dedica-middleware-token")).toBe("dm_test");
     expect(header(raw[0], "x-dedica-transmitter")).toBe(TRANSMITTER);
+    expect(header(raw[0], "x-dedica-batch-id")).toBeTruthy();
   });
 
-  it("reports the agent version of a normal page", async () => {
-    const { events } = await reported(get("/pricing", { "user-agent": GPTBOT_UA }));
-    expect(events[0]).toMatchObject({ outcome: "negotiated", category: "eligible", served_by_dedica: true });
+  it("reports a person's page load with a daily pseudonym, never the IP", async () => {
+    const { events, raw } = await reported(get("/pricing", visitor({ referer: "https://chatgpt.com/c/123?q=secret" })));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ outcome: "origin", served_by_dedica: false, client: { kind: "unknown" }, referer: "https://chatgpt.com/c/123" });
+    expect(events[0].visitor).toMatch(/^[0-9a-f]{64}$/);
+    expect((events[0].headers as Record<string, string>)["sec-fetch-dest"]).toBe("document");
+    expect(String(raw[0].init?.body)).not.toContain("203.0.113.7");
   });
 
-  it("never reports a person's page view", async () => {
-    const { events } = await reported(get("/pricing", browserHeaders));
+  it("gives the same visitor the same pseudonym, and a different salt a different one", async () => {
+    const same = await reported([get("/a", visitor()), get("/b", visitor())]);
+    expect(same.events[0].visitor).toBe(same.events[1].visitor);
+    const h = harness();
+    await h.edge.policies.refresh(env);
+    const ctx = new FakeCtx();
+    await h.edge.fetch(get("/a", visitor()), { ...env, DEDICA_SALT: "another" }, ctx);
+    await ctx.drain();
+    expect(eventBodies(h.events)[0].visitor).not.toBe(same.events[0].visitor);
+  });
+
+  it("skips static files, a page's sub-requests and prefetches", async () => {
+    const { events } = await reported([
+      get("/app.js", { "user-agent": GPTBOT_UA }),
+      get("/logo.png", visitor({ "sec-fetch-dest": "image" })),
+      get("/api/cart", visitor({ "sec-fetch-dest": "empty", "sec-fetch-mode": "cors" })),
+      get("/next-page", visitor({ "sec-purpose": "prefetch" })),
+    ]);
     expect(events).toHaveLength(0);
   });
 
-  it("reports a search engine that kept the normal page", async () => {
-    const { events } = await reported(get("/pricing.md", { "user-agent": GOOGLEBOT_UA }));
-    expect(events[0]).toMatchObject({ outcome: "human_page", served_by_dedica: false, client: { kind: "bot", matched: "googlebot" } });
-  });
-
-  it("reports a managed file and a proxied /mcp call", async () => {
-    const llms = await reported(get("/llms.txt", browserHeaders), {
+  it("reports the agent version, a search engine's normal page, a managed file, /mcp and the agent 404", async () => {
+    expect((await reported(get("/pricing", { "user-agent": GPTBOT_UA }))).events[0]).toMatchObject({ outcome: "negotiated", category: "eligible" });
+    expect((await reported(get("/pricing.md", { "user-agent": GOOGLEBOT_UA }))).events[0]).toMatchObject({
+      outcome: "human_page",
+      client: { kind: "bot", matched: "googlebot" },
+    });
+    const llms = await reported(get("/llms.txt", visitor()), {
       policy: policy({ artifacts: [{ path: "/llms.txt", contentType: "text/plain", action: "proxy" }] }),
       serve: () => new Response("# llms", { status: 200, headers: { "content-type": "text/plain" } }),
     });
-    expect(llms.events[0]).toMatchObject({ outcome: "artifact", served_by_dedica: true, client: { kind: "unknown" } });
-
+    expect(llms.events[0]).toMatchObject({ outcome: "artifact", served_by_dedica: true });
     const mcp = await reported(get("/mcp", { "content-type": "application/json", "user-agent": "claude-user" }, { method: "POST", body: "{}" }), {
       policy: policy({ proxies: [{ path: "/mcp", targets: { POST: `${API}/api/v1/middleware/query/mcp` } }] }),
     });
     expect(mcp.events[0]).toMatchObject({ method: "POST", path: "/mcp", outcome: "proxied", served_by_dedica: true });
-  });
-
-  it("reports the markdown 404 given to an agent", async () => {
-    const { events } = await reported(get("/nope", { "user-agent": GPTBOT_UA }), {
+    const missing = await reported(get("/nope", { "user-agent": GPTBOT_UA }), {
       serve: () => new Response("nf", { status: 404 }),
       origin: () => new Response("missing", { status: 404 }),
     });
-    expect(events[0]).toMatchObject({ outcome: "agent_404", status: 404, served_by_dedica: true });
+    expect(missing.events[0]).toMatchObject({ outcome: "agent_404", status: 404 });
+  });
+
+  it("sends the events of a few seconds in one batch", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const h = harness({ serve: () => markdown(), sleep: () => gate });
+    await h.edge.policies.refresh(env);
+    const ctx = new FakeCtx();
+    for (const request of [get("/a", visitor()), get("/b", { "user-agent": GPTBOT_UA }), get("/c", visitor())]) await h.edge.fetch(request, env, ctx);
+    // Building an event hashes the visitor (async): wait until all three are buffered.
+    for (let i = 0; i < 100 && h.edge.reporter.pending < 3; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.edge.reporter.pending).toBe(3);
+    expect(h.events).toHaveLength(0); // still waiting for the batch window
+    release();
+    await ctx.drain();
+    expect(h.events).toHaveLength(1);
+    expect(eventBodies(h.events).map((e) => e.path).sort()).toEqual(["/a", "/b", "/c"]);
   });
 
   it("reports nothing for Dedica's own crawler, the connectivity files or an unconfigured worker", async () => {
     for (const request of [
-      get("/pricing.md", { "user-agent": GPTBOT_UA, "x-dedica-origin-fetch": "1" }),
+      get("/pricing", { "user-agent": GPTBOT_UA, "x-dedica-origin-fetch": "1" }),
       get("/.well-known/dedica.json", { "user-agent": GPTBOT_UA }),
-      get("/__dedica/status", { "user-agent": GPTBOT_UA }),
+      get("/__dedica/status", visitor()),
     ]) {
       expect((await reported(request)).events).toHaveLength(0);
     }
     const h = harness();
     const ctx = new FakeCtx();
-    await h.edge.fetch(get("/pricing.md", { "user-agent": GPTBOT_UA }), { ...env, DEDICA_MIDDLEWARE_TOKEN: "" }, ctx);
+    await h.edge.fetch(get("/pricing", visitor()), { ...env, DEDICA_MIDDLEWARE_TOKEN: "" }, ctx);
     await ctx.drain();
     expect(h.events).toHaveLength(0);
   });
 
-  it("answers the same when reporting fails", async () => {
-    for (const events of [
-      () => new Response("down", { status: 500 }),
-      () => {
+  it("keeps a batch Dedica can't take yet and sends it with the next one", async () => {
+    let status = 503;
+    const { edge, raw } = await reported(get("/a", visitor()), { events: () => new Response("busy", { status }) });
+    expect(edge.reporter.pending).toBe(1);
+    status = 202;
+    const ctx = new FakeCtx();
+    await edge.fetch(get("/b", visitor()), env, ctx);
+    await ctx.drain();
+    expect(edge.reporter.pending).toBe(0);
+    expect(eventBodies([raw[raw.length - 1]]).map((e) => e.path)).toEqual(["/a", "/b"]);
+  });
+
+  it("answers the same when reporting fails; drops a batch Dedica refuses, keeps one it couldn't reach", async () => {
+    const refused = await reported(get("/pricing.md", { "user-agent": GPTBOT_UA }), { events: () => new Response("bad", { status: 400 }) });
+    expect(await refused.res.text()).toBe("# Pricing\n");
+    expect(refused.edge.reporter.pending).toBe(0);
+
+    const unreachable = await reported(get("/pricing.md", { "user-agent": GPTBOT_UA }), {
+      events: () => {
         throw new Error("network down");
       },
-    ]) {
-      const { res, raw } = await reported(get("/pricing.md", { "user-agent": GPTBOT_UA }), { events });
-      expect(await res.text()).toBe("# Pricing\n");
-      expect(raw).toHaveLength(1);
-    }
+    });
+    expect(await unreachable.res.text()).toBe("# Pricing\n");
+    expect(unreachable.edge.reporter.pending).toBe(1);
   });
 });
 
