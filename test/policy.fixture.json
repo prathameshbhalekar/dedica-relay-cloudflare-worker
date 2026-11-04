@@ -367,9 +367,8 @@
   "artifacts": [],
   "serve": {
     "baseUrl": "https://api.dedica.test/api/v1/middleware/serve/",
-    "version": "aebe14d8654fdcaa"
+    "version": "0ba28f80538c92d1"
   },
-  "query": null,
-  "queryAvailability": {},
-  "version": "aebe14d8654fdcaa"
+  "proxies": [],
+  "version": "0ba28f80538c92d1"
 }

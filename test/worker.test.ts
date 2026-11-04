@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { TRANSMITTER } from "../src/env";
 import { Server } from "../src/serve";
+import type { Proxy } from "../src/types";
 import {
   API,
   FakeCtx,
@@ -161,7 +162,8 @@ describe("autopilot serving", () => {
   it("ignores non-GET requests", async () => {
     const { edge, calls } = harness({ serve: () => markdown() });
     await edge.fetch(get("/pricing.md", { "user-agent": GPTBOT_UA }, { method: "POST", body: "x" }), env, new FakeCtx());
-    expect(calls).toHaveLength(0);
+    // At most the policy is read (in the background); nothing is served.
+    expect(calls.filter((c) => !new URL(c.url).pathname.startsWith("/api/v1/middleware/policy/"))).toHaveLength(0);
   });
 });
 
@@ -297,68 +299,71 @@ describe("policy cache", () => {
   });
 });
 
-describe("query routes", () => {
-  it("pass /mcp and /ask through while the policy has no query settings", async () => {
-    const { edge, originCalls } = harness();
-    const res = await edge.fetch(get("/mcp", { "content-type": "application/json" }, { method: "POST", body: "{}" }), env, new FakeCtx());
-    expect(await res.text()).toBe("origin page");
+describe("proxied paths", () => {
+  const BASE = `${API}/api/v1/middleware/query`;
+  // The shape Dedica's policy sends (mcp_gateway McpQuerySelector.proxies_get).
+  const ASK: Proxy = { path: "/ask", targets: { GET: `${BASE}/ask`, POST: `${BASE}/ask/nlweb` } };
+  const MCP: Proxy = { path: "/mcp", targets: { POST: `${BASE}/mcp` } };
+
+  /** A harness whose isolate already has the policy (the first request on a cold isolate passes through). */
+  async function warm(proxies: Proxy[]) {
+    const h = harness({ policy: policy({ proxies }) });
+    await h.edge.policies.refresh(env);
+    h.calls.length = 0;
+    return h;
+  }
+  const post = (path: string, headers: Record<string, string> = {}) =>
+    get(path, { "content-type": "application/json", ...headers }, { method: "POST", body: "{}" });
+
+  it("passes everything through while the policy lists no proxies", async () => {
+    const { edge, originCalls } = await warm([]);
+    expect(await (await edge.fetch(post("/mcp"), env, new FakeCtx())).text()).toBe("origin page");
     expect(originCalls).toHaveLength(1);
   });
 
-  it("proxy /mcp to Dedica when enabled, only to Dedica's origin", async () => {
-    const query = { askPath: "/ask", mcpPath: "/mcp", baseUrl: `${API}/`, enabled: { mcp: true, ask: false } };
-    const { edge, calls, originCalls } = harness({ policy: policy({ query }) });
+  it("sends each method to its own target, keeping the query string, and relays Dedica's answer", async () => {
+    const { edge, calls, originCalls } = await warm([ASK, MCP]);
     // The fake answers anything that is not policy/serve with 500, which the proxy relays.
-    const res = await edge.fetch(get("/mcp", { "content-type": "application/json", cookie: "secret" }, { method: "POST", body: "{}" }), env, new FakeCtx());
-    expect(res.status).toBe(500);
-    const proxied = calls.find((c) => c.url === `${API}/mcp`);
-    expect(proxied).toBeDefined();
-    expect((proxied?.init?.headers as Headers).get("cookie")).toBeNull();
-    expect((proxied?.init?.headers as Headers).get("x-dedica-middleware-token")).toBe("dm_test");
-    expect(originCalls).toHaveLength(0);
-
-    const ask = await edge.fetch(get("/ask?q=hi"), env, new FakeCtx());
-    expect(await ask.text()).toBe("origin page");
-
-    const { edge: other } = harness({ policy: policy({ query: { ...query, baseUrl: "https://evil.example/" } }) });
-    const refused = await other.fetch(get("/mcp", {}, { method: "POST", body: "{}" }), env, new FakeCtx());
-    expect(refused.status).toBe(503);
-    expect(((await refused.json()) as { jsonrpc: string }).jsonrpc).toBe("2.0");
-  });
-
-  it("joins Dedica's query base URL (no trailing slash) with /mcp and /ask, keeping the query string", async () => {
-    // The shape Dedica's policy sends (mcp_gateway McpQuerySelector.settings_get).
-    const query = { askPath: "/ask", mcpPath: "/mcp", baseUrl: `${API}/api/v1/middleware/query`, enabled: { mcp: true, ask: true }, requestsPerMinute: 30 };
-    const { edge, calls, originCalls } = harness({ policy: policy({ query }) });
-    await edge.fetch(get("/mcp", { "content-type": "application/json" }, { method: "POST", body: "{}" }), env, new FakeCtx());
+    const mcp = await edge.fetch(post("/mcp", { cookie: "secret" }), env, new FakeCtx());
+    expect(mcp.status).toBe(500);
     await edge.fetch(get("/ask?q=how+much"), env, new FakeCtx());
-    expect(calls.map((c) => c.url)).toEqual(expect.arrayContaining([`${API}/api/v1/middleware/query/mcp`, `${API}/api/v1/middleware/query/ask?q=how+much`]));
+    await edge.fetch(post("/ask/", { accept: "text/event-stream" }), env, new FakeCtx());
+    expect(calls.map((c) => `${c.init?.method} ${c.url}`)).toEqual([`POST ${BASE}/mcp`, `GET ${BASE}/ask?q=how+much`, `POST ${BASE}/ask/nlweb`]);
+    const headers = calls[0].init?.headers as Headers;
+    expect(headers.get("cookie")).toBeNull();
+    expect(headers.get("x-dedica-middleware-token")).toBe("dm_test");
+    expect((calls[2].init?.headers as Headers).get("accept")).toBe("text/event-stream");
     expect(originCalls).toHaveLength(0);
   });
 
-  it("sends NLWeb POST /ask to Dedica's ask/nlweb API and labels /ask failures for NLWeb", async () => {
-    const query = { askPath: "/ask", mcpPath: "/mcp", baseUrl: `${API}/api/v1/middleware/query`, enabled: { mcp: false, ask: true }, requestsPerMinute: 1 };
-    const { edge, calls } = harness({ policy: policy({ query }) });
-    const body = JSON.stringify({ query: { text: "how much?" } });
-    await edge.fetch(get("/ask", { "content-type": "application/json", accept: "text/event-stream", "cf-connecting-ip": "5.6.7.8" }, { method: "POST", body }), env, new FakeCtx());
-    const proxied = calls.find((c) => c.url === `${API}/api/v1/middleware/query/ask/nlweb`);
-    expect(proxied?.init?.method).toBe("POST");
-    expect((proxied?.init?.headers as Headers).get("accept")).toBe("text/event-stream");
-
-    const limited = await edge.fetch(get("/ask", { "cf-connecting-ip": "5.6.7.8" }, { method: "POST", body }), env, new FakeCtx());
-    expect(limited.status).toBe(429);
-    expect(((await limited.json()) as { _meta: { response_type: string } })._meta.response_type).toBe("failure");
+  it("proxies any path the policy lists", async () => {
+    const { edge, calls } = await warm([{ path: "/agents/search", targets: { GET: `${BASE}/search` } }]);
+    await edge.fetch(get("/agents/search?q=x"), env, new FakeCtx());
+    expect(calls.map((c) => c.url)).toEqual([`${BASE}/search?q=x`]);
   });
 
-  it("rate-limits query visitors and rejects wrong methods", async () => {
-    const query = { askPath: "/ask", mcpPath: "/mcp", baseUrl: `${API}/`, requestsPerMinute: 1 };
-    const { edge } = harness({ policy: policy({ query }) });
-    const req = () => get("/mcp", { "cf-connecting-ip": "1.2.3.4" }, { method: "POST", body: "{}" });
-    await edge.fetch(req(), env, new FakeCtx());
-    const limited = await edge.fetch(req(), env, new FakeCtx());
-    expect(limited.status).toBe(429);
-    expect(limited.headers.get("retry-after")).not.toBeNull();
-    expect((await edge.fetch(get("/mcp"), env, new FakeCtx())).status).toBe(405);
+  it("passes an unlisted method, a too-large body or a target off Dedica's origin through, body intact", async () => {
+    const { edge, originCalls } = await warm([MCP, { path: "/evil", targets: { POST: "https://evil.example/x" } }]);
+    expect(await (await edge.fetch(get("/mcp"), env, new FakeCtx())).text()).toBe("origin page");
+    const big = "x".repeat(40_000);
+    await edge.fetch(get("/mcp", {}, { method: "POST", body: big }), env, new FakeCtx());
+    expect(await originCalls[1].text()).toBe(big);
+    expect(await (await edge.fetch(post("/evil"), env, new FakeCtx())).text()).toBe("origin page");
+  });
+
+  it("passes through on a cold isolate (no policy yet)", async () => {
+    const { edge, originCalls } = harness({ policy: policy({ proxies: [MCP] }) });
+    expect(await (await edge.fetch(post("/mcp"), env, new FakeCtx())).text()).toBe("origin page");
+    expect(originCalls).toHaveLength(1);
+  });
+
+  it("ignores malformed entries", async () => {
+    const bad = [{ path: "mcp", targets: { POST: `${BASE}/mcp` } }, { path: "/", targets: { POST: `${BASE}/mcp` } }, { path: "/x" }] as Proxy[];
+    const { edge, originCalls } = await warm(bad);
+    await edge.fetch(post("/"), env, new FakeCtx());
+    await edge.fetch(post("/mcp"), env, new FakeCtx());
+    await edge.fetch(post("/x"), env, new FakeCtx());
+    expect(originCalls).toHaveLength(3);
   });
 });
 

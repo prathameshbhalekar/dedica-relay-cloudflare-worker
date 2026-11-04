@@ -51,12 +51,10 @@ export interface Artifact {
   version?: string;
 }
 
-export interface QuerySettings {
-  enabled?: { ask?: boolean; mcp?: boolean };
-  askPath: string;
-  mcpPath: string;
-  baseUrl: string;
-  requestsPerMinute?: number;
+/** A path on the customer's domain proxied to Dedica: per method it takes, the Dedica URL that answers. */
+export interface Proxy {
+  path: string;
+  targets: Record<string, string>;
 }
 
 export interface Policy {
@@ -69,6 +67,6 @@ export interface Policy {
   twins: Twins;
   artifacts: Artifact[];
   serve: { baseUrl: string; version: string } | null;
-  query: QuerySettings | null;
-  queryAvailability?: { ask?: "unavailable"; mcp?: "unavailable" };
+  /** Paths proxied to Dedica (`/ask`, `/mcp`, ...). Empty: none. */
+  proxies: Proxy[];
 }

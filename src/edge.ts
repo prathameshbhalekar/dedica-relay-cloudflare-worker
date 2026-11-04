@@ -16,7 +16,7 @@ import {
 } from "./env";
 import { detectAgent, isTraditionalBot, keepHumanPage, needsPolicy, twinEligible, userAgent } from "./detect";
 import { type FetchFn, PolicyStore } from "./policy";
-import { createQueryProxy, isQueryRoute } from "./query";
+import { proxyRequest } from "./proxy";
 import { Server } from "./serve";
 import type { Artifact, Ctx, Env, Policy } from "./types";
 
@@ -40,8 +40,6 @@ export class Edge {
   private readonly dedicaFetch: FetchFn;
   private readonly originFetch: (request: Request) => Promise<Response>;
   private readonly now: () => number;
-  private queryProxy: ReturnType<typeof createQueryProxy> | null = null;
-  private queryProxyIdentity = "";
 
   constructor(options: EdgeOptions = {}) {
     this.dedicaFetch = options.dedicaFetch ?? ((input, init) => fetch(input, init));
@@ -111,32 +109,17 @@ export class Edge {
     });
   }
 
-  private queryProxyFor(env: Env) {
-    const identity = JSON.stringify([env.DEDICA_SITE_ID, env.DEDICA_MIDDLEWARE_TOKEN, env.DEDICA_API_URL, env.DEDICA_QUERY_ORIGIN]);
-    if (!this.queryProxy || this.queryProxyIdentity !== identity) {
-      this.queryProxyIdentity = identity;
-      this.queryProxy = createQueryProxy(env, {
-        fetch: (target, init) => this.dedicaFetch(target, init),
-        visitor: (request) => request.headers.get("cf-connecting-ip") ?? "unknown",
-        now: this.now,
-      });
-    }
-    return this.queryProxy;
-  }
-
   /** What Dedica answers for this request, in order, or null and the origin answers. */
   async serve(request: Request, env: Env, ctx: Ctx): Promise<Response | null> {
     if (!configured(env)) return null;
     const url = new URL(request.url);
     const originFetch = request.headers.get(ORIGIN_FETCH_HEADER) === "1";
 
-    // 1. /ask and /mcp: explicit capabilities, independent of agent detection.
-    if (isQueryRoute(url.pathname)) {
-      const query = await this.queryProxyFor(env)(request, (blocking) => this.policies.get(env, ctx, blocking), this.policies.policy);
-      if (query) return query;
-    }
-    if (request.method !== "GET" && request.method !== "HEAD") return null;
+    // 1. Paths the policy proxies to Dedica (`/ask`, `/mcp`, ...), any method; independent of agent detection.
     if (originFetch) return null;
+    const proxied = await proxyRequest(request, await this.policies.get(env, ctx, false), env, this.dedicaFetch);
+    if (proxied) return proxied;
+    if (request.method !== "GET" && request.method !== "HEAD") return null;
 
     const p = await this.policies.get(env, ctx, needsPolicy(request, url.pathname, this.policies.policy));
     if (!p || p.mode !== "autopilot") return null;
