@@ -7,7 +7,8 @@
  * returns null, and the origin answers. Dedica's own answers, errors included, are relayed as they are.
  */
 
-import { TOKEN_HEADER, TRANSMITTER, TRANSMITTER_HEADER, apiBase } from "./env";
+import { readCapped } from "./body";
+import { apiBase, dedicaHeaders } from "./env";
 import type { Env, Policy } from "./types";
 
 const PROXY_BODY_MAX = 32_768;
@@ -32,12 +33,12 @@ export function proxyTarget(targetUrl: string, env: Env): URL | null {
 /** Dedica's answer for a proxied path on the customer's domain, or null and the origin answers. */
 export async function proxyRequest(
   request: Request,
+  url: URL,
   policy: Policy | null,
   env: Env,
   fetchFn: (url: string, init: RequestInit) => Promise<Response>,
 ): Promise<Response | null> {
   if (!policy || policy.mode !== "autopilot" || !Array.isArray(policy.proxies) || !env.DEDICA_MIDDLEWARE_TOKEN) return null;
-  const url = new URL(request.url);
   const route = policy.proxies.find((p) => typeof p?.path === "string" && /^\/[^?#\s]+$/.test(p.path) && normalPath(p.path) === normalPath(url.pathname));
   const targetUrl = route?.targets?.[request.method];
   if (typeof targetUrl !== "string" || url.search.length > PROXY_BODY_MAX) return null;
@@ -63,7 +64,7 @@ const FORWARDED_HEADERS = new Set([
 ]);
 
 function proxyHeaders(request: Request, env: Env): Headers {
-  const headers = new Headers({ [TOKEN_HEADER]: env.DEDICA_MIDDLEWARE_TOKEN ?? "", [TRANSMITTER_HEADER]: TRANSMITTER });
+  const headers = new Headers(dedicaHeaders(env));
   let bytes = 0;
   for (const [name, value] of request.headers) {
     if (!FORWARDED_HEADERS.has(name) && !name.startsWith("mcp-param-")) continue;
@@ -77,35 +78,7 @@ function proxyHeaders(request: Request, env: Env): Headers {
 async function proxyBody(request: Request, signal: AbortSignal): Promise<Uint8Array | undefined> {
   if (!request.body) return undefined;
   if (Number(request.headers.get("content-length")) > PROXY_BODY_MAX) throw new RangeError("proxy body too large");
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const abort = () => void reader.cancel().catch(() => {});
-  signal.addEventListener("abort", abort, { once: true });
-  try {
-    while (true) {
-      if (signal.aborted) throw new Error("proxy aborted");
-      const { value, done } = await reader.read();
-      if (signal.aborted) throw new Error("proxy aborted");
-      if (done) break;
-      size += value.byteLength;
-      if (size > PROXY_BODY_MAX) {
-        void reader.cancel().catch(() => {});
-        throw new RangeError("proxy body too large");
-      }
-      chunks.push(value);
-    }
-    const body = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      body.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return body;
-  } finally {
-    signal.removeEventListener("abort", abort);
-    reader.releaseLock();
-  }
+  return readCapped(request.body, PROXY_BODY_MAX, signal);
 }
 
 /** Dedica's response, streamed; null when it can't be reached or the body is too large. */

@@ -29,16 +29,15 @@ export function apiBase(env: Env): string {
   return (env.DEDICA_API_URL ?? "").replace(/\/+$/, "");
 }
 
-export function policyUrl(env: Env): string {
-  return env.DEDICA_POLICY_URL ?? `${apiBase(env)}/api/v1/middleware/policy/`;
+/** A Dedica endpoint (`DEDICA_POLICY_URL` overrides the policy one, for testing). */
+export function dedicaUrl(env: Env, endpoint: "policy" | "heartbeat" | "events"): string {
+  const override = endpoint === "policy" ? env.DEDICA_POLICY_URL : undefined;
+  return override ?? `${apiBase(env)}/api/v1/middleware/${endpoint}/`;
 }
 
-export function heartbeatUrl(env: Env): string {
-  return `${apiBase(env)}/api/v1/middleware/heartbeat/`;
-}
-
-export function eventsUrl(env: Env): string {
-  return `${apiBase(env)}/api/v1/middleware/events/`;
+/** The headers that identify this worker to Dedica. */
+export function dedicaHeaders(env: Env): Record<string, string> {
+  return { [TOKEN_HEADER]: env.DEDICA_MIDDLEWARE_TOKEN ?? "", [TRANSMITTER_HEADER]: TRANSMITTER };
 }
 
 /** Whether the worker has what it needs to talk to Dedica at all. */
@@ -47,4 +46,15 @@ export function configured(env: Env): boolean {
 }
 
 /** Fetch options that keep Dedica's answers out of Cloudflare's cache (it holds credentials). */
-export const NO_CACHE_CF = { cacheEverything: false, cacheTtlByStatus: { "100-599": -1 } };
+const NO_CACHE_CF = { cacheEverything: false, cacheTtlByStatus: { "100-599": -1 } };
+
+/** Options for a call to Dedica: this worker's identity plus `headers`, a timeout, and no Cloudflare caching. */
+export function dedicaInit(env: Env, timeoutMs: number, init: Omit<RequestInit, "headers"> & { headers?: Record<string, string> } = {}): RequestInit {
+  return {
+    ...init,
+    headers: { ...dedicaHeaders(env), ...init.headers },
+    signal: AbortSignal.timeout(timeoutMs),
+    // `cf` is Cloudflare's extension of RequestInit (ignored outside Workers).
+    cf: NO_CACHE_CF,
+  };
+}

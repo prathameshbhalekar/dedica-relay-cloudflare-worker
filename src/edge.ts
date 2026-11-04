@@ -6,15 +6,13 @@ import {
   ORIGIN_FETCH_HEADER,
   SERVED_HEADER,
   STATUS_PATH,
-  TOKEN_HEADER,
-  TRANSMITTER,
-  TRANSMITTER_HEADER,
   VERSION,
   WELL_KNOWN_PATH,
   configured,
-  heartbeatUrl,
+  dedicaInit,
+  dedicaUrl,
 } from "./env";
-import { Reporter, type Trace, buildEvent, isReportable, newTrace } from "./analytics";
+import { Reporter, type Trace, buildEvent, isReportable } from "./analytics";
 import { detectAgent, isTraditionalBot, keepHumanPage, needsPolicy, twinEligible, userAgent } from "./detect";
 import { type FetchFn, PolicyStore } from "./policy";
 import { proxyRequest } from "./proxy";
@@ -23,8 +21,6 @@ import type { Artifact, Ctx, Env, Policy } from "./types";
 
 const TEXT = "text/plain; charset=utf-8";
 const MARKDOWN = "text/markdown; charset=utf-8";
-/** `?mode=agent` asks for the agent version of any page, like `Accept: text/markdown`. */
-const AGENT_MODE_PARAM = "mode";
 
 export interface EdgeOptions {
   /** Calls to Dedica (and nothing else). */
@@ -34,6 +30,28 @@ export interface EdgeOptions {
   now?: () => number;
   /** Waits before a traffic batch is sent (tests pass one that doesn't wait). */
   sleep?: (ms: number) => Promise<void>;
+}
+
+/** What the worker needs to know about a request, worked out once. */
+interface Visit {
+  request: Request;
+  url: URL;
+  /** Lowercased user agent. */
+  ua: string;
+  /** `Accept: text/markdown`. */
+  acceptsMarkdown: boolean;
+  /** `?mode=agent`: an explicit ask for the agent version of any page, even from a browser. */
+  agentMode: boolean;
+}
+
+/** How a request was answered. `response` is null only for `human_page`: the origin still has to answer. */
+interface Served extends Trace {
+  response: Response | null;
+}
+
+/** Dedica's response as a served answer, or null when Dedica had none (and the origin answers). */
+function served(outcome: Trace["outcome"], category: Trace["category"], response: Response | null): Served | null {
+  return response && { response, outcome, category };
 }
 
 /** All per-isolate state of the worker. Tests build their own; the deployed worker uses one. */
@@ -72,41 +90,47 @@ export class Edge {
         { headers: { "cache-control": "no-store" } },
       );
     }
+    // Not set up yet, or Dedica's own crawler reading the origin's page: pass straight through, unreported.
+    if (!configured(env) || request.headers.get(ORIGIN_FETCH_HEADER) === "1") return this.originFetch(request);
 
     const startedAt = this.now();
-    const trace = newTrace();
-    const response = await this.answer(request, env, ctx, trace);
-    this.report(request, response, env, ctx, trace, startedAt);
-    return response;
+    const visit: Visit = {
+      request,
+      url,
+      ua: userAgent(request.headers),
+      acceptsMarkdown: (request.headers.get("accept") ?? "").includes("text/markdown"),
+      agentMode: url.searchParams.get("mode") === "agent",
+    };
+    const answer = await this.answer(visit, env, ctx);
+    this.report(visit, answer, env, ctx, startedAt);
+    return answer.response;
   }
 
-  /** Dedica's answer, else the origin's (with a markdown 404 for an agent). Records what happened in `trace`. */
-  private async answer(request: Request, env: Env, ctx: Ctx, trace: Trace): Promise<Response> {
-    const served = await this.serve(request, env, ctx, trace).catch((error: unknown) => {
+  /** Dedica's answer, else the origin's (with a markdown 404 for an agent). */
+  private async answer(visit: Visit, env: Env, ctx: Ctx): Promise<Served & { response: Response }> {
+    const fromDedica = await this.serve(visit, env, ctx).catch((error: unknown) => {
       console.warn(`[dedica] serving failed; using origin: ${error}`);
       return null;
     });
-    if (served) return served;
-    trace.outcome = trace.outcome === "human_page" ? "human_page" : "origin";
-    trace.category = null;
-    const response = await this.originFetch(request);
+    if (fromDedica?.response) return { ...fromDedica, response: fromDedica.response };
+
+    const response = await this.originFetch(visit.request);
+    let notFound: Response | null = null;
     try {
-      const notFound = this.agentNotFound(request, env, response);
-      if (notFound) trace.outcome = "agent_404";
-      return notFound ?? response;
+      notFound = this.agentNotFound(visit, response);
     } catch {
-      return response;
+      // Keep the origin's answer.
     }
+    if (notFound) return { response: notFound, outcome: "agent_404", category: null };
+    return { response, outcome: fromDedica?.outcome === "human_page" ? "human_page" : "origin", category: null };
   }
 
   /** Reports the request to Dedica in the background, batched (see analytics.ts). Never throws. */
-  private report(request: Request, response: Response, env: Env, ctx: Ctx, trace: Trace, startedAt: number): void {
+  private report(visit: Visit, answer: Served & { response: Response }, env: Env, ctx: Ctx, startedAt: number): void {
     try {
-      if (!configured(env) || request.headers.get(ORIGIN_FETCH_HEADER) === "1") return;
-      if (!isReportable(new URL(request.url), request.headers)) return;
-      const p = this.policies.policy;
+      if (!isReportable(visit.url, visit.request.headers)) return;
       ctx.waitUntil(
-        buildEvent(request, response, trace, p, env, startedAt, this.now())
+        buildEvent(visit.request, answer.response, answer, this.policies.policy, env, startedAt, this.now())
           .then((event) => this.reporter.add(event, env, ctx))
           .catch((error: unknown) => console.warn(`[dedica] event report skipped: ${error}`)),
       );
@@ -116,16 +140,12 @@ export class Edge {
   }
 
   /** The origin's 404/410, with a markdown body for an agent so it knows where to go next (status kept). */
-  private agentNotFound(request: Request, env: Env, response: Response): Response | null {
+  private agentNotFound({ request, url, ua, acceptsMarkdown }: Visit, response: Response): Response | null {
     if (response.status !== 404 && response.status !== 410) return null;
-    if ((request.method !== "GET" && request.method !== "HEAD") || !configured(env)) return null;
-    if (request.headers.get(ORIGIN_FETCH_HEADER) === "1") return null;
+    if (request.method !== "GET" && request.method !== "HEAD") return null;
     const p = this.policies.policy;
     if (!p || p.mode !== "autopilot") return null;
-    const ua = userAgent(request.headers);
-    const url = new URL(request.url);
-    const wantsMarkdown = (request.headers.get("accept") ?? "").includes("text/markdown");
-    if (isTraditionalBot(ua, p.detection) || !(wantsMarkdown || detectAgent(request.headers, p.detection))) return null;
+    if (isTraditionalBot(ua, p.detection) || !(acceptsMarkdown || detectAgent(request.headers, p.detection))) return null;
     if ((response.headers.get("content-type") ?? "").includes("text/markdown")) return null;
 
     const lines = [
@@ -144,18 +164,12 @@ export class Edge {
   }
 
   /** What Dedica answers for this request, in order, or null and the origin answers. */
-  async serve(request: Request, env: Env, ctx: Ctx, trace: Trace = newTrace()): Promise<Response | null> {
-    if (!configured(env)) return null;
-    const url = new URL(request.url);
-    const originFetch = request.headers.get(ORIGIN_FETCH_HEADER) === "1";
+  private async serve(visit: Visit, env: Env, ctx: Ctx): Promise<Served | null> {
+    const { request, url, ua } = visit;
 
     // 1. Paths the policy proxies to Dedica (`/ask`, `/mcp`, ...), any method; independent of agent detection.
-    if (originFetch) return null;
-    const proxied = await proxyRequest(request, await this.policies.get(env, ctx, false), env, this.dedicaFetch);
-    if (proxied) {
-      trace.outcome = "proxied";
-      return proxied;
-    }
+    const proxied = await proxyRequest(request, url, await this.policies.get(env, ctx, false), env, this.dedicaFetch);
+    if (proxied) return { response: proxied, outcome: "proxied", category: null };
     if (request.method !== "GET" && request.method !== "HEAD") return null;
 
     const p = await this.policies.get(env, ctx, needsPolicy(request, url.pathname, this.policies.policy));
@@ -163,81 +177,67 @@ export class Edge {
 
     // 2. A file Dedica manages (llms.txt, ...), for every visitor.
     const artifact = p.artifacts.find((a) => a.path === url.pathname);
-    if (artifact) return this.artifact(p, env, artifact, request, trace);
+    if (artifact) return this.artifact(p, env, artifact, request);
 
-    const ua = userAgent(request.headers);
-    const traditional = isTraditionalBot(ua, p.detection);
     const questionParams = p.twins.questionParams ?? [];
     const asksQuestion =
       questionParams.some((key) => Boolean(url.searchParams.get(key)?.trim())) || (questionParams.length > 0 && /~~.+/.test(url.pathname));
-    const agentMode = url.searchParams.get(AGENT_MODE_PARAM) === "agent";
 
     // 3. Search engines, link previews and (unknown) crawlers keep the person's page, unless they ask for agent mode.
-    if (keepHumanPage(ua, p.detection, asksQuestion || agentMode)) {
-      trace.outcome = "human_page";
-      return null;
-    }
+    if (keepHumanPage(ua, p.detection, asksQuestion || visit.agentMode)) return { response: null, outcome: "human_page", category: null };
 
-    // 4. An explicit markdown request (`/pricing.md`), for anyone who asks.
+    // 4. An explicit markdown request (`/pricing.md`), for anyone who asks. A declared question makes the answer
+    //    personal, so it is never shared-cached.
     if (p.twins.enabled && url.pathname.endsWith(p.twins.suffix)) {
       const page = url.pathname.slice(0, -p.twins.suffix.length) || "/";
       if (!twinEligible(page, p.twins)) return null;
-      const asked = varies(url, p);
-      trace.outcome = "twin";
-      trace.category = "public";
-      return this.server.fromDedica(p, env, { path: url.pathname, search: url.search, category: "public" }, TEXT, !asked, request);
+      const shared = !questionParams.some((key) => url.searchParams.has(key));
+      const input = { path: url.pathname, search: url.search, category: "public" } as const;
+      return served("twin", "public", await this.server.fromDedica(p, env, input, TEXT, shared, request));
     }
 
     // 5. The agent version of a page, for a detected agent, a client asking for `text/markdown`, or `?mode=agent`.
     //    Never for a search engine. If Dedica has none for the page, the origin answers.
-    const wantsMarkdown = (request.headers.get("accept") ?? "").includes("text/markdown") || agentMode;
-    if (p.twins.negotiate && !traditional && twinEligible(url.pathname, p.twins) && (wantsMarkdown || detectAgent(request.headers, p.detection))) {
-      trace.outcome = "negotiated";
-      trace.category = "eligible";
-      return this.server.fromDedica(p, env, { path: url.pathname, search: url.search, category: "eligible" }, TEXT, false, request);
+    const wantsAgentVersion = visit.acceptsMarkdown || visit.agentMode || detectAgent(request.headers, p.detection);
+    if (p.twins.negotiate && !isTraditionalBot(ua, p.detection) && twinEligible(url.pathname, p.twins) && wantsAgentVersion) {
+      const input = { path: url.pathname, search: url.search, category: "eligible" } as const;
+      return served("negotiated", "eligible", await this.server.fromDedica(p, env, input, TEXT, false, request));
     }
     return null;
   }
 
-  private artifact(p: Policy, env: Env, artifact: Artifact, request: Request, trace: Trace): Promise<Response | null> | Response | null {
-    trace.category = "public";
+  private async artifact(p: Policy, env: Env, artifact: Artifact, request: Request): Promise<Served | null> {
     switch (artifact.action ?? "proxy") {
       case "proxy":
-        trace.outcome = "artifact";
-        return this.server.fromDedica(p, env, { path: artifact.path, version: artifact.version, category: "public" }, artifact.contentType, true, request);
+        return served("artifact", "public", await this.artifactFromDedica(p, env, artifact, request));
       case "fallback":
-        return this.fallback(p, env, artifact, request, trace);
+        return this.fallback(p, env, artifact, request);
       case "block":
-        trace.outcome = "blocked";
-        return new Response("Not available to this client.", { status: 403 });
+        return { response: new Response("Not available to this client.", { status: 403 }), outcome: "blocked", category: "public" };
       default:
         return null;
     }
   }
 
   /** The origin's own file when it has one, else Dedica's, else the origin's answer after all. */
-  private async fallback(p: Policy, env: Env, artifact: Artifact, request: Request, trace: Trace): Promise<Response> {
+  private async fallback(p: Policy, env: Env, artifact: Artifact, request: Request): Promise<Served> {
     const origin = await this.originFetch(request).catch(() => null);
-    trace.outcome = "artifact_origin";
-    if (origin && originHasFile(origin)) return origin;
-    try {
-      const served = await this.server.fromDedica(
-        p,
-        env,
-        { path: artifact.path, version: artifact.version, category: "public" },
-        artifact.contentType,
-        true,
-        request,
-      );
-      if (served) {
-        trace.outcome = "artifact";
+    if (!(origin && originHasFile(origin))) {
+      const fromDedica = await this.artifactFromDedica(p, env, artifact, request).catch((error: unknown) => {
+        console.warn(`[dedica] serving failed; using origin: ${error}`);
+        return null;
+      });
+      if (fromDedica) {
         void origin?.body?.cancel().catch(() => {});
-        return served;
+        return { response: fromDedica, outcome: "artifact", category: "public" };
       }
-    } catch (error) {
-      console.warn(`[dedica] serving failed; using origin: ${error}`);
     }
-    return origin ?? this.originFetch(request);
+    return { response: origin ?? (await this.originFetch(request)), outcome: "artifact_origin", category: "public" };
+  }
+
+  private artifactFromDedica(p: Policy, env: Env, artifact: Artifact, request: Request): Promise<Response | null> {
+    const input = { path: artifact.path, version: artifact.version, category: "public" } as const;
+    return this.server.fromDedica(p, env, input, artifact.contentType, true, request);
   }
 
   async heartbeat(env: Env): Promise<void> {
@@ -246,12 +246,14 @@ export class Edge {
       return;
     }
     try {
-      const response = await this.dedicaFetch(heartbeatUrl(env), {
-        method: "POST",
-        headers: { "content-type": "application/json", [TOKEN_HEADER]: env.DEDICA_MIDDLEWARE_TOKEN ?? "", [TRANSMITTER_HEADER]: TRANSMITTER },
-        body: JSON.stringify({ middleware: MIDDLEWARE, version: VERSION }),
-        signal: AbortSignal.timeout(HEARTBEAT_TIMEOUT_MS),
-      });
+      const response = await this.dedicaFetch(
+        dedicaUrl(env, "heartbeat"),
+        dedicaInit(env, HEARTBEAT_TIMEOUT_MS, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ middleware: MIDDLEWARE, version: VERSION }),
+        }),
+      );
       if (!response.ok) console.warn(`[dedica] heartbeat failed: ${response.status}`);
     } catch (err) {
       console.warn(`[dedica] heartbeat request failed: ${err}`);
@@ -264,9 +266,4 @@ function originHasFile(response: Response): boolean {
   if (response.status >= 300 && response.status < 400) return true;
   if (response.status < 200 || response.status >= 300) return false;
   return !(response.headers.get("content-type") ?? "").toLowerCase().includes("text/html");
-}
-
-/** Whether the visitor asked a declared question: that answer is never shared-cached. */
-function varies(url: URL, p: Policy): boolean {
-  return (p.twins.questionParams ?? []).some((k) => url.searchParams.has(k));
 }

@@ -34,11 +34,14 @@ export function userAgent(headers: Headers): string {
   return (headers.get("user-agent") ?? "").toLowerCase();
 }
 
+/** The longest user-agent needle in the user agent, if any. */
+function longestNeedle(ua: string, d: Detection): Needle | undefined {
+  return needles(d).find((x) => ua.includes(x.n));
+}
+
 export function isTraditionalBot(ua: string, d: Detection): boolean {
   if (!ua) return false;
-  if ((d.traditionalBotsExact ?? []).includes(ua)) return true;
-  const hit = needles(d).find((x) => ua.includes(x.n));
-  return hit ? hit.traditional : false;
+  return (d.traditionalBotsExact ?? []).includes(ua) || Boolean(longestNeedle(ua, d)?.traditional);
 }
 
 /** A person opening a page in a browser. */
@@ -62,29 +65,41 @@ function compiled(pattern: string | undefined): RegExp | null {
   return regexCache.get(pattern) ?? null;
 }
 
-export function detectAgent(headers: Headers, d: Detection): boolean {
+/**
+ * Why a client looks automated, in order of precedence: an exact search-engine match, an exact agent match, the
+ * longest user-agent needle (`traditional` or `agent`), a known signing domain (`signed`), then an automated-looking
+ * user agent without fetch metadata (`botlike`). `matched` is the needle or signing domain that decided it.
+ */
+interface Classification {
+  reason: "traditional" | "agent" | "signed" | "botlike" | null;
+  matched: string | null;
+  signatureAgent: string | null;
+}
+
+function classify(headers: Headers, d: Detection): Classification {
   const ua = userAgent(headers);
+  const signed = headers.get("signature-agent")?.toLowerCase();
+  const signatureAgent = signed ? (d.signatureAgentDomains.find((x) => signed.includes(x)) ?? null) : null;
 
   if (ua) {
-    // Exact matches outrank substring needles; a search-engine exact match vetoes first.
-    const exactVeto = (d.traditionalBotsExact ?? []).includes(ua);
-    const exactAgent = !exactVeto && (d.agentUaExact ?? []).includes(ua);
-    const hit = exactVeto ? { traditional: true } : exactAgent ? { traditional: false } : needles(d).find((x) => ua.includes(x.n));
-    if (hit) {
-      if (hit.traditional) return false;
-      if (!isBrowserNavigation(headers)) return true;
-    }
+    if ((d.traditionalBotsExact ?? []).includes(ua)) return { reason: "traditional", matched: ua, signatureAgent };
+    if ((d.agentUaExact ?? []).includes(ua)) return { reason: "agent", matched: ua, signatureAgent };
+    const hit = longestNeedle(ua, d);
+    if (hit) return { reason: hit.traditional ? "traditional" : "agent", matched: hit.n, signatureAgent };
   }
-
-  const signed = headers.get("signature-agent")?.toLowerCase();
-  if (signed && d.signatureAgentDomains.some((x) => signed.includes(x))) return true;
-
-  const pattern = compiled(d.botLikePattern);
-  if (!headers.has("sec-fetch-mode") && ua && pattern?.test(ua)) {
-    // Something that looks automated, unless it is a known search engine.
-    return !needles(d).some((x) => x.traditional && ua.includes(x.n));
+  if (signatureAgent) return { reason: "signed", matched: signatureAgent, signatureAgent };
+  if (ua && !headers.has("sec-fetch-mode") && compiled(d.botLikePattern)?.test(ua)) {
+    return { reason: "botlike", matched: null, signatureAgent: null };
   }
-  return false;
+  return { reason: null, matched: null, signatureAgent: null };
+}
+
+/** Whether Dedica's agent version may be served: never to a search engine; a known agent navigating in a browser
+ *  only if it also signs its requests. */
+export function detectAgent(headers: Headers, d: Detection): boolean {
+  const c = classify(headers, d);
+  if (c.reason === "agent") return !isBrowserNavigation(headers) || c.signatureAgent !== null;
+  return c.reason === "signed" || c.reason === "botlike";
 }
 
 /** Who a client is, for traffic reporting: `ai_agent`, `bot` (search engine, preview, monitor, unknown crawler) or
@@ -96,21 +111,9 @@ export interface ClientMatch {
 }
 
 export function clientMatch(headers: Headers, d: Detection): ClientMatch {
-  const ua = userAgent(headers);
-  const signed = headers.get("signature-agent")?.toLowerCase() ?? null;
-  const signedDomain = signed ? (d.signatureAgentDomains.find((x) => signed.includes(x)) ?? null) : null;
-
-  if (ua) {
-    // Same precedence as detectAgent/isTraditionalBot: exact search-engine, exact agent, then the longest needle.
-    if ((d.traditionalBotsExact ?? []).includes(ua)) return { kind: "bot", matched: ua, signatureAgent: signedDomain };
-    if ((d.agentUaExact ?? []).includes(ua)) return { kind: "ai_agent", matched: ua, signatureAgent: signedDomain };
-    const hit = needles(d).find((x) => ua.includes(x.n));
-    if (hit) return { kind: hit.traditional ? "bot" : "ai_agent", matched: hit.n, signatureAgent: signedDomain };
-  }
-  if (signedDomain) return { kind: "ai_agent", matched: signedDomain, signatureAgent: signedDomain };
-  const pattern = compiled(d.botLikePattern);
-  if (!headers.has("sec-fetch-mode") && ua && pattern?.test(ua)) return { kind: "bot", matched: null, signatureAgent: null };
-  return { kind: "unknown", matched: null, signatureAgent: null };
+  const { reason, matched, signatureAgent } = classify(headers, d);
+  const kind = reason === "agent" || reason === "signed" ? "ai_agent" : reason ? "bot" : "unknown";
+  return { kind, matched, signatureAgent };
 }
 
 /** Whether this client keeps the person's page even at a `.md` URL (search engines, previews, unknown bots). */

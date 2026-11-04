@@ -9,7 +9,7 @@
  *   Dedica is never hammered. Only one refresh runs at a time per isolate.
  */
 
-import { NO_CACHE_CF, POLICY_TIMEOUT_MS, SCHEMA_MAJOR, TOKEN_HEADER, TRANSMITTER, TRANSMITTER_HEADER, policyUrl } from "./env";
+import { POLICY_TIMEOUT_MS, SCHEMA_MAJOR, dedicaInit, dedicaUrl } from "./env";
 import type { Ctx, Env, Policy } from "./types";
 
 export const POLICY_FAILURE_GRACE_MS = 30_000;
@@ -32,12 +32,7 @@ export class PolicyStore {
   private async performRefresh(env: Env): Promise<void> {
     if (this.now() < this.backoffUntil) return;
     try {
-      const res = await this.fetchFn(policyUrl(env), {
-        headers: { [TOKEN_HEADER]: env.DEDICA_MIDDLEWARE_TOKEN ?? "", [TRANSMITTER_HEADER]: TRANSMITTER, accept: "application/json" },
-        signal: AbortSignal.timeout(POLICY_TIMEOUT_MS),
-        // `cf` is Cloudflare's extension of RequestInit (ignored outside Workers).
-        cf: NO_CACHE_CF,
-      });
+      const res = await this.fetchFn(dedicaUrl(env, "policy"), dedicaInit(env, POLICY_TIMEOUT_MS, { headers: { accept: "application/json" } }));
 
       if (res.status === 401 || res.status === 403) {
         this.policy = null;

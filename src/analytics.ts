@@ -13,7 +13,7 @@
  */
 
 import { clientMatch, type ClientMatch } from "./detect";
-import { EVENTS_TIMEOUT_MS, NO_CACHE_CF, SERVED_HEADER, TOKEN_HEADER, TRANSMITTER, TRANSMITTER_HEADER, eventsUrl } from "./env";
+import { EVENTS_TIMEOUT_MS, SERVED_HEADER, dedicaInit, dedicaUrl } from "./env";
 import type { FetchFn } from "./policy";
 import type { Ctx, Env, Policy } from "./types";
 
@@ -29,14 +29,10 @@ export type Outcome =
   | "agent_404" // the origin's 404/410 with a markdown body for an agent
   | "origin"; // passed through to the origin
 
-/** Filled in while a request is handled, then turned into an event. */
+/** How the worker answered a request, turned into an event. */
 export interface Trace {
   outcome: Outcome;
   category: "public" | "eligible" | null;
-}
-
-export function newTrace(): Trace {
-  return { outcome: "origin", category: null };
 }
 
 export interface TrafficEvent {
@@ -218,18 +214,14 @@ export class Reporter {
     const batch = this.buffer.slice(0, MAX_BATCH);
     this.buffer = this.buffer.slice(MAX_BATCH);
     try {
-      const response = await this.fetchFn(eventsUrl(env), {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-ndjson",
-          [TOKEN_HEADER]: env.DEDICA_MIDDLEWARE_TOKEN ?? "",
-          [TRANSMITTER_HEADER]: TRANSMITTER,
-          "x-dedica-batch-id": crypto.randomUUID(),
-        },
-        body: batch.map((event) => JSON.stringify(event)).join("\n"),
-        signal: AbortSignal.timeout(EVENTS_TIMEOUT_MS),
-        cf: NO_CACHE_CF,
-      } as RequestInit);
+      const response = await this.fetchFn(
+        dedicaUrl(env, "events"),
+        dedicaInit(env, EVENTS_TIMEOUT_MS, {
+          method: "POST",
+          headers: { "content-type": "application/x-ndjson", "x-dedica-batch-id": crypto.randomUUID() },
+          body: batch.map((event) => JSON.stringify(event)).join("\n"),
+        }),
+      );
       if (response.status !== 202) {
         console.warn(`[dedica] event batch ${response.status}: ${(await response.text().catch(() => "")).slice(0, 300)}`);
       } else {

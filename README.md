@@ -94,5 +94,6 @@ npx wrangler dev --var DEDICA_SITE_ID:<site id> --var DEDICA_API_URL:http://loca
 ```
 
 `src/`: `index.ts` (entry: default handler only), `edge.ts` (request order, heartbeat), `policy.ts` (cache and backoff), `detect.ts` (agent
-detection), `serve.ts` (serving from Dedica), `proxy.ts` (paths proxied to Dedica: `/ask`, `/mcp`), `env.ts`, `types.ts`.
+detection), `serve.ts` (serving from Dedica), `proxy.ts` (paths proxied to Dedica: `/ask`, `/mcp`), `analytics.ts` (traffic reporting), `body.ts` (capped body reads),
+`env.ts` (constants and Dedica call helpers), `types.ts`.
 `test/policy.fixture.json` is a real policy from the backend (the backend tests check it still matches).

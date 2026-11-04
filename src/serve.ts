@@ -4,17 +4,8 @@
  * anything else, including Dedica being slow or down, falls back to the origin.
  */
 
-import {
-  CATEGORY_HEADER,
-  NO_CACHE_CF,
-  ORIGIN_FETCH_HEADER,
-  SERVED_HEADER,
-  SERVE_TIMEOUT_MS,
-  TOKEN_HEADER,
-  TRANSMITTER,
-  TRANSMITTER_HEADER,
-  VERSION_HEADER,
-} from "./env";
+import { readCapped } from "./body";
+import { CATEGORY_HEADER, SERVED_HEADER, SERVE_TIMEOUT_MS, VERSION_HEADER, dedicaInit } from "./env";
 import type { FetchFn } from "./policy";
 import type { Env, Policy } from "./types";
 
@@ -71,21 +62,11 @@ export class Server {
   }
 
   async fromDedica(policy: Policy, env: Env, input: ServeInput, contentType: string, shared: boolean, request: Request): Promise<Response | null> {
-    if (request.headers.get(ORIGIN_FETCH_HEADER) === "1") return null;
     const target = this.target(policy, input);
     if (!target) return null;
 
-    const upstream = await this.fetchFn(target.url, {
-      headers: {
-        ...requestHeaders(env, request, shared),
-        [VERSION_HEADER]: target.version,
-        [CATEGORY_HEADER]: input.category ?? "eligible",
-      },
-      redirect: "manual",
-      signal: AbortSignal.timeout(SERVE_TIMEOUT_MS),
-      // `cf` is Cloudflare's extension of RequestInit (ignored outside Workers).
-      cf: NO_CACHE_CF,
-    }).catch((error: unknown) => {
+    const headers = { ...requestHeaders(request, shared), [VERSION_HEADER]: target.version, [CATEGORY_HEADER]: input.category ?? "eligible" };
+    const upstream = await this.fetchFn(target.url, dedicaInit(env, SERVE_TIMEOUT_MS, { headers, redirect: "manual" })).catch((error: unknown) => {
       this.failed();
       throw error;
     });
@@ -102,7 +83,6 @@ export class Server {
     // A 304 only makes sense for validators the visitor sent, which are only forwarded when shared.
     if (upstream.status === 304 && !shared) return null;
 
-    const headers = responseHeaders(upstream, contentType, shared);
     const body =
       upstream.status === 304 || request.method === "HEAD"
         ? null
@@ -110,15 +90,14 @@ export class Server {
             this.failed();
             throw error;
           });
-    return new Response(body, { status: upstream.status, headers });
+    return new Response(body, { status: upstream.status, headers: responseHeaders(upstream, contentType, shared) });
   }
 }
 
-/** Only dedicated representations accept browser validators: a page URL may carry an HTML validator. */
-function requestHeaders(env: Env, request: Request, shared: boolean): Record<string, string> {
+/** The visitor's headers Dedica needs. Only dedicated representations accept browser validators: a page URL may
+ *  carry an HTML validator. */
+function requestHeaders(request: Request, shared: boolean): Record<string, string> {
   const headers: Record<string, string> = {
-    [TOKEN_HEADER]: env.DEDICA_MIDDLEWARE_TOKEN ?? "",
-    [TRANSMITTER_HEADER]: TRANSMITTER,
     "user-agent": request.headers.get("user-agent") ?? "",
     accept: request.headers.get("accept") ?? "",
   };
@@ -151,39 +130,8 @@ function responseHeaders(upstream: Response, contentType: string, shared: boolea
 }
 
 /** Reads a served body, refusing anything over 8 MB or slower than 10 s. */
-export async function readServingBody(response: Response): Promise<ArrayBuffer> {
+export async function readServingBody(response: Response): Promise<Uint8Array> {
   if (Number(response.headers.get("content-length")) > MAX_SERVED_BYTES) throw new Error("dedica document exceeds serving limit");
-  if (!response.body) return new ArrayBuffer(0);
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error("dedica document body deadline exceeded"));
-      void reader.cancel().catch(() => {});
-    }, BODY_DEADLINE_MS);
-  });
-  try {
-    while (true) {
-      const { done, value } = await Promise.race([reader.read(), timeout]);
-      if (done) break;
-      size += value.byteLength;
-      if (size > MAX_SERVED_BYTES) throw new Error("dedica document exceeds serving limit");
-      chunks.push(value);
-    }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return bytes.buffer;
-  } catch (error) {
-    void reader.cancel().catch(() => {});
-    throw error;
-  } finally {
-    if (timer !== null) clearTimeout(timer);
-    reader.releaseLock();
-  }
+  if (!response.body) return new Uint8Array(0);
+  return readCapped(response.body, MAX_SERVED_BYTES, AbortSignal.timeout(BODY_DEADLINE_MS));
 }
