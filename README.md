@@ -11,10 +11,21 @@ What it does:
   detected agent or `?mode=agent`) and Dedica-managed files (`/llms.txt`, ...) from Dedica, serves
   discovery files (`/openapi.json`, `/.well-known/ard.json`, ...) only where your origin has none, gives
   agents a markdown body on your 404s, and proxies `/ask` (GET, and NLWeb POST) and `/mcp` once Dedica
-  enables them. In `report` mode it passes everything through.
+  enables them. In `report` mode it passes everything through;
+- reports agent traffic to Dedica (protocol section 7, see below).
 
 **Fail-safe:** people, browsers and search engines always get your normal page; every call to Dedica
 has a timeout; anything unexpected (Dedica slow, down, no content for a path) falls back to your origin.
+
+## Traffic reporting
+
+For every request from an AI agent or a bot (search engine, link preview, monitor, unknown crawler), and every request
+Dedica answered (`.md`, managed files, `/mcp`, `/ask`, the agent 404), the worker POSTs one event to
+`/api/v1/middleware/events/` in the background (`src/analytics.ts`): time, method, host, path, status, latency, what it
+did (`outcome`), whether Dedica served it, the matched agent, the user agent (truncated) and Cloudflare's country.
+
+It never delays or changes a response, gives up after 3 s, and only logs a failure. It never sends a person's page
+view, an IP address, the query string, cookies or the token, and never reports Dedica's own crawler.
 
 ## Install
 

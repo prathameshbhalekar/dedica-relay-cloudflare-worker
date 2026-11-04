@@ -1,6 +1,6 @@
 {
   "name": "dedica-middleware-cloudflare-worker",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "Reference Dedica middleware for Cloudflare Workers (protocol v1): policy, agent detection, serving from Dedica with origin fallback.",
   "type": "module",

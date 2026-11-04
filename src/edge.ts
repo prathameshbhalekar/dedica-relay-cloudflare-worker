@@ -14,6 +14,7 @@ import {
   configured,
   heartbeatUrl,
 } from "./env";
+import { type Trace, buildEvent, newTrace, sendEvent } from "./analytics";
 import { detectAgent, isTraditionalBot, keepHumanPage, needsPolicy, twinEligible, userAgent } from "./detect";
 import { type FetchFn, PolicyStore } from "./policy";
 import { proxyRequest } from "./proxy";
@@ -68,16 +69,41 @@ export class Edge {
       );
     }
 
-    const served = await this.serve(request, env, ctx).catch((error: unknown) => {
+    const startedAt = this.now();
+    const trace = newTrace();
+    const response = await this.answer(request, env, ctx, trace);
+    this.report(request, response, env, ctx, trace, startedAt);
+    return response;
+  }
+
+  /** Dedica's answer, else the origin's (with a markdown 404 for an agent). Records what happened in `trace`. */
+  private async answer(request: Request, env: Env, ctx: Ctx, trace: Trace): Promise<Response> {
+    const served = await this.serve(request, env, ctx, trace).catch((error: unknown) => {
       console.warn(`[dedica] serving failed; using origin: ${error}`);
       return null;
     });
     if (served) return served;
+    trace.outcome = trace.outcome === "human_page" ? "human_page" : "origin";
+    trace.category = null;
     const response = await this.originFetch(request);
     try {
-      return this.agentNotFound(request, env, response) ?? response;
+      const notFound = this.agentNotFound(request, env, response);
+      if (notFound) trace.outcome = "agent_404";
+      return notFound ?? response;
     } catch {
       return response;
+    }
+  }
+
+  /** Reports the request to Dedica in the background (agents, bots and anything Dedica answered). Never throws. */
+  private report(request: Request, response: Response, env: Env, ctx: Ctx, trace: Trace, startedAt: number): void {
+    try {
+      const p = this.policies.policy;
+      if (!p || !configured(env) || request.headers.get(ORIGIN_FETCH_HEADER) === "1") return;
+      const event = buildEvent(request, response, trace, p, startedAt, this.now());
+      if (event) ctx.waitUntil(sendEvent(event, env, this.dedicaFetch));
+    } catch (error) {
+      console.warn(`[dedica] event report skipped: ${error}`);
     }
   }
 
@@ -110,7 +136,7 @@ export class Edge {
   }
 
   /** What Dedica answers for this request, in order, or null and the origin answers. */
-  async serve(request: Request, env: Env, ctx: Ctx): Promise<Response | null> {
+  async serve(request: Request, env: Env, ctx: Ctx, trace: Trace = newTrace()): Promise<Response | null> {
     if (!configured(env)) return null;
     const url = new URL(request.url);
     const originFetch = request.headers.get(ORIGIN_FETCH_HEADER) === "1";
@@ -118,7 +144,10 @@ export class Edge {
     // 1. Paths the policy proxies to Dedica (`/ask`, `/mcp`, ...), any method; independent of agent detection.
     if (originFetch) return null;
     const proxied = await proxyRequest(request, await this.policies.get(env, ctx, false), env, this.dedicaFetch);
-    if (proxied) return proxied;
+    if (proxied) {
+      trace.outcome = "proxied";
+      return proxied;
+    }
     if (request.method !== "GET" && request.method !== "HEAD") return null;
 
     const p = await this.policies.get(env, ctx, needsPolicy(request, url.pathname, this.policies.policy));
@@ -126,7 +155,7 @@ export class Edge {
 
     // 2. A file Dedica manages (llms.txt, ...), for every visitor.
     const artifact = p.artifacts.find((a) => a.path === url.pathname);
-    if (artifact) return this.artifact(p, env, artifact, request);
+    if (artifact) return this.artifact(p, env, artifact, request, trace);
 
     const ua = userAgent(request.headers);
     const traditional = isTraditionalBot(ua, p.detection);
@@ -136,13 +165,18 @@ export class Edge {
     const agentMode = url.searchParams.get(AGENT_MODE_PARAM) === "agent";
 
     // 3. Search engines, link previews and (unknown) crawlers keep the person's page, unless they ask for agent mode.
-    if (keepHumanPage(ua, p.detection, asksQuestion || agentMode)) return null;
+    if (keepHumanPage(ua, p.detection, asksQuestion || agentMode)) {
+      trace.outcome = "human_page";
+      return null;
+    }
 
     // 4. An explicit markdown request (`/pricing.md`), for anyone who asks.
     if (p.twins.enabled && url.pathname.endsWith(p.twins.suffix)) {
       const page = url.pathname.slice(0, -p.twins.suffix.length) || "/";
       if (!twinEligible(page, p.twins)) return null;
       const asked = varies(url, p);
+      trace.outcome = "twin";
+      trace.category = "public";
       return this.server.fromDedica(p, env, { path: url.pathname, search: url.search, category: "public" }, TEXT, !asked, request);
     }
 
@@ -150,18 +184,23 @@ export class Edge {
     //    Never for a search engine. If Dedica has none for the page, the origin answers.
     const wantsMarkdown = (request.headers.get("accept") ?? "").includes("text/markdown") || agentMode;
     if (p.twins.negotiate && !traditional && twinEligible(url.pathname, p.twins) && (wantsMarkdown || detectAgent(request.headers, p.detection))) {
+      trace.outcome = "negotiated";
+      trace.category = "eligible";
       return this.server.fromDedica(p, env, { path: url.pathname, search: url.search, category: "eligible" }, TEXT, false, request);
     }
     return null;
   }
 
-  private artifact(p: Policy, env: Env, artifact: Artifact, request: Request): Promise<Response | null> | Response | null {
+  private artifact(p: Policy, env: Env, artifact: Artifact, request: Request, trace: Trace): Promise<Response | null> | Response | null {
+    trace.category = "public";
     switch (artifact.action ?? "proxy") {
       case "proxy":
+        trace.outcome = "artifact";
         return this.server.fromDedica(p, env, { path: artifact.path, version: artifact.version, category: "public" }, artifact.contentType, true, request);
       case "fallback":
-        return this.fallback(p, env, artifact, request);
+        return this.fallback(p, env, artifact, request, trace);
       case "block":
+        trace.outcome = "blocked";
         return new Response("Not available to this client.", { status: 403 });
       default:
         return null;
@@ -169,8 +208,9 @@ export class Edge {
   }
 
   /** The origin's own file when it has one, else Dedica's, else the origin's answer after all. */
-  private async fallback(p: Policy, env: Env, artifact: Artifact, request: Request): Promise<Response> {
+  private async fallback(p: Policy, env: Env, artifact: Artifact, request: Request, trace: Trace): Promise<Response> {
     const origin = await this.originFetch(request).catch(() => null);
+    trace.outcome = "artifact_origin";
     if (origin && originHasFile(origin)) return origin;
     try {
       const served = await this.server.fromDedica(
@@ -182,6 +222,7 @@ export class Edge {
         request,
       );
       if (served) {
+        trace.outcome = "artifact";
         void origin?.body?.cancel().catch(() => {});
         return served;
       }

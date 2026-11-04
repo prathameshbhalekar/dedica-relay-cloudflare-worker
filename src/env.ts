@@ -1,7 +1,7 @@
 import type { Env } from "./types";
 
 export const MIDDLEWARE = "cloudflare-worker";
-export const VERSION = "1.1.0";
+export const VERSION = "1.2.0";
 /** Identifies this worker to Dedica: `<name>/<version>`. */
 export const TRANSMITTER = `${MIDDLEWARE}/${VERSION}`;
 
@@ -23,6 +23,7 @@ export const SCHEMA_MAJOR = 1;
 export const POLICY_TIMEOUT_MS = 4_000;
 export const SERVE_TIMEOUT_MS = 10_000;
 export const HEARTBEAT_TIMEOUT_MS = 5_000;
+export const EVENTS_TIMEOUT_MS = 3_000;
 
 export function apiBase(env: Env): string {
   return (env.DEDICA_API_URL ?? "").replace(/\/+$/, "");
@@ -34,6 +35,10 @@ export function policyUrl(env: Env): string {
 
 export function heartbeatUrl(env: Env): string {
   return `${apiBase(env)}/api/v1/middleware/heartbeat/`;
+}
+
+export function eventsUrl(env: Env): string {
+  return `${apiBase(env)}/api/v1/middleware/events/`;
 }
 
 /** Whether the worker has what it needs to talk to Dedica at all. */

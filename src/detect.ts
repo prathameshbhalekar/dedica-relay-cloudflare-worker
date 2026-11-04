@@ -87,6 +87,32 @@ export function detectAgent(headers: Headers, d: Detection): boolean {
   return false;
 }
 
+/** Who a client is, for traffic reporting: `ai_agent`, `bot` (search engine, preview, monitor, unknown crawler) or
+ *  `unknown` (most likely a person). `matched` is the user-agent needle or signing domain that decided it. */
+export interface ClientMatch {
+  kind: "ai_agent" | "bot" | "unknown";
+  matched: string | null;
+  signatureAgent: string | null;
+}
+
+export function clientMatch(headers: Headers, d: Detection): ClientMatch {
+  const ua = userAgent(headers);
+  const signed = headers.get("signature-agent")?.toLowerCase() ?? null;
+  const signedDomain = signed ? (d.signatureAgentDomains.find((x) => signed.includes(x)) ?? null) : null;
+
+  if (ua) {
+    // Same precedence as detectAgent/isTraditionalBot: exact search-engine, exact agent, then the longest needle.
+    if ((d.traditionalBotsExact ?? []).includes(ua)) return { kind: "bot", matched: ua, signatureAgent: signedDomain };
+    if ((d.agentUaExact ?? []).includes(ua)) return { kind: "ai_agent", matched: ua, signatureAgent: signedDomain };
+    const hit = needles(d).find((x) => ua.includes(x.n));
+    if (hit) return { kind: hit.traditional ? "bot" : "ai_agent", matched: hit.n, signatureAgent: signedDomain };
+  }
+  if (signedDomain) return { kind: "ai_agent", matched: signedDomain, signatureAgent: signedDomain };
+  const pattern = compiled(d.botLikePattern);
+  if (!headers.has("sec-fetch-mode") && ua && pattern?.test(ua)) return { kind: "bot", matched: null, signatureAgent: null };
+  return { kind: "unknown", matched: null, signatureAgent: null };
+}
+
 /** Whether this client keeps the person's page even at a `.md` URL (search engines, previews, unknown bots). */
 export function keepHumanPage(ua: string, d: Detection, asksQuestion: boolean): boolean {
   const veto = d.humanPageVeto;

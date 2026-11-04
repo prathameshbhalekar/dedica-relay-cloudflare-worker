@@ -41,15 +41,23 @@ export interface Call {
 type Handler = (url: URL, init?: RequestInit) => Response | Promise<Response>;
 
 /** An Edge whose Dedica and origin calls are fakes. Dedica's policy is `current`, served by default. */
-export function harness(options: { policy?: Policy | null; serve?: Handler; origin?: (request: Request) => Response; now?: () => number } = {}) {
+export function harness(
+  options: { policy?: Policy | null; serve?: Handler; origin?: (request: Request) => Response; now?: () => number; events?: Handler } = {},
+) {
   const calls: Call[] = [];
   const originCalls: Request[] = [];
+  /** Traffic events the worker reported (kept apart from `calls`, which are serving traffic). */
+  const events: Call[] = [];
   const state = { policy: options.policy === undefined ? policy() : options.policy, policyStatus: 200 };
   const edge = new Edge({
     now: options.now,
     dedicaFetch: async (input, init) => {
-      calls.push({ url: input, init });
       const url = new URL(input);
+      if (url.pathname === "/api/v1/middleware/events/") {
+        events.push({ url: input, init });
+        return options.events ? options.events(url, init) : new Response('{"ok":true}', { status: 202 });
+      }
+      calls.push({ url: input, init });
       if (url.pathname === "/api/v1/middleware/policy/") {
         if (state.policyStatus !== 200) return new Response("nope", { status: state.policyStatus });
         return Response.json(state.policy);
@@ -65,7 +73,7 @@ export function harness(options: { policy?: Policy | null; serve?: Handler; orig
       return new Response("origin page", { status: 200, headers: { "content-type": "text/html" } });
     },
   });
-  return { edge, calls, originCalls, state };
+  return { edge, calls, originCalls, events, state };
 }
 
 export function get(path: string, headers: Record<string, string> = {}, init: RequestInit = {}): Request {
@@ -78,4 +86,9 @@ export function serveCalls(calls: Call[]): Call[] {
 
 export function header(call: Call, name: string): string | undefined {
   return (call.init?.headers as Record<string, string> | undefined)?.[name];
+}
+
+/** The bodies of reported traffic events. */
+export function eventBodies(events: Call[]): Record<string, unknown>[] {
+  return events.map((e) => JSON.parse(String(e.init?.body)) as Record<string, unknown>);
 }

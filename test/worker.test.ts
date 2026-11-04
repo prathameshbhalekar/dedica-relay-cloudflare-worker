@@ -10,6 +10,7 @@ import {
   GPTBOT_UA,
   browserHeaders,
   env,
+  eventBodies,
   get,
   harness,
   header,
@@ -23,7 +24,7 @@ describe("connectivity", () => {
   it("serves the well-known file without calling Dedica", async () => {
     const { edge, calls } = harness();
     const res = await edge.fetch(get("/.well-known/dedica.json"), env, new FakeCtx());
-    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.1.0" });
+    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.2.0" });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(calls).toHaveLength(0);
   });
@@ -40,7 +41,7 @@ describe("connectivity", () => {
     await edge.heartbeat(env);
     expect(calls[0].url).toBe(`${API}/api/v1/middleware/heartbeat/`);
     expect(header(calls[0], "x-dedica-middleware-token")).toBe("dm_test");
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.1.0" });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.2.0" });
   });
 
   it("passes everything through when not configured", async () => {
@@ -364,6 +365,109 @@ describe("proxied paths", () => {
     await edge.fetch(post("/mcp"), env, new FakeCtx());
     await edge.fetch(post("/x"), env, new FakeCtx());
     expect(originCalls).toHaveLength(3);
+  });
+});
+
+describe("traffic reporting", () => {
+  /** Handles one request on a warm isolate (policy loaded) and returns the reported events after the background work. */
+  async function reported(request: Request, options: Parameters<typeof harness>[0] = {}) {
+    const h = harness({ serve: () => markdown(), ...options });
+    await h.edge.policies.refresh(env);
+    const ctx = new FakeCtx();
+    const res = await h.edge.fetch(request, env, ctx);
+    await ctx.drain();
+    return { res, events: eventBodies(h.events), raw: h.events };
+  }
+
+  it("reports an agent reading a markdown page, without the query string or secrets", async () => {
+    const { events, raw } = await reported(get("/pricing.md?utm=x&email=a@b.c", { "user-agent": GPTBOT_UA, cookie: "session=1" }));
+    expect(events).toHaveLength(1);
+    const event = events[0];
+    expect(event).toMatchObject({
+      method: "GET",
+      host: "shop.example",
+      path: "/pricing.md",
+      status: 200,
+      outcome: "twin",
+      served_by_dedica: true,
+      category: "public",
+      client: { kind: "ai_agent", matched: "gptbot", signature_agent: null },
+      mode: "autopilot",
+      policy_version: policy().version,
+      country: null,
+    });
+    expect(String(event.user_agent)).toContain("GPTBot");
+    const body = String(raw[0].init?.body);
+    expect(body).not.toContain("utm");
+    expect(body).not.toContain("session=1");
+    expect(body).not.toContain("dm_test");
+    expect(raw[0].url).toBe(`${API}/api/v1/middleware/events/`);
+    expect(header(raw[0], "x-dedica-middleware-token")).toBe("dm_test");
+    expect(header(raw[0], "x-dedica-transmitter")).toBe(TRANSMITTER);
+  });
+
+  it("reports the agent version of a normal page", async () => {
+    const { events } = await reported(get("/pricing", { "user-agent": GPTBOT_UA }));
+    expect(events[0]).toMatchObject({ outcome: "negotiated", category: "eligible", served_by_dedica: true });
+  });
+
+  it("never reports a person's page view", async () => {
+    const { events } = await reported(get("/pricing", browserHeaders));
+    expect(events).toHaveLength(0);
+  });
+
+  it("reports a search engine that kept the normal page", async () => {
+    const { events } = await reported(get("/pricing.md", { "user-agent": GOOGLEBOT_UA }));
+    expect(events[0]).toMatchObject({ outcome: "human_page", served_by_dedica: false, client: { kind: "bot", matched: "googlebot" } });
+  });
+
+  it("reports a managed file and a proxied /mcp call", async () => {
+    const llms = await reported(get("/llms.txt", browserHeaders), {
+      policy: policy({ artifacts: [{ path: "/llms.txt", contentType: "text/plain", action: "proxy" }] }),
+      serve: () => new Response("# llms", { status: 200, headers: { "content-type": "text/plain" } }),
+    });
+    expect(llms.events[0]).toMatchObject({ outcome: "artifact", served_by_dedica: true, client: { kind: "unknown" } });
+
+    const mcp = await reported(get("/mcp", { "content-type": "application/json", "user-agent": "claude-user" }, { method: "POST", body: "{}" }), {
+      policy: policy({ proxies: [{ path: "/mcp", targets: { POST: `${API}/api/v1/middleware/query/mcp` } }] }),
+    });
+    expect(mcp.events[0]).toMatchObject({ method: "POST", path: "/mcp", outcome: "proxied", served_by_dedica: true });
+  });
+
+  it("reports the markdown 404 given to an agent", async () => {
+    const { events } = await reported(get("/nope", { "user-agent": GPTBOT_UA }), {
+      serve: () => new Response("nf", { status: 404 }),
+      origin: () => new Response("missing", { status: 404 }),
+    });
+    expect(events[0]).toMatchObject({ outcome: "agent_404", status: 404, served_by_dedica: true });
+  });
+
+  it("reports nothing for Dedica's own crawler, the connectivity files or an unconfigured worker", async () => {
+    for (const request of [
+      get("/pricing.md", { "user-agent": GPTBOT_UA, "x-dedica-origin-fetch": "1" }),
+      get("/.well-known/dedica.json", { "user-agent": GPTBOT_UA }),
+      get("/__dedica/status", { "user-agent": GPTBOT_UA }),
+    ]) {
+      expect((await reported(request)).events).toHaveLength(0);
+    }
+    const h = harness();
+    const ctx = new FakeCtx();
+    await h.edge.fetch(get("/pricing.md", { "user-agent": GPTBOT_UA }), { ...env, DEDICA_MIDDLEWARE_TOKEN: "" }, ctx);
+    await ctx.drain();
+    expect(h.events).toHaveLength(0);
+  });
+
+  it("answers the same when reporting fails", async () => {
+    for (const events of [
+      () => new Response("down", { status: 500 }),
+      () => {
+        throw new Error("network down");
+      },
+    ]) {
+      const { res, raw } = await reported(get("/pricing.md", { "user-agent": GPTBOT_UA }), { events });
+      expect(await res.text()).toBe("# Pricing\n");
+      expect(raw).toHaveLength(1);
+    }
   });
 });
 
