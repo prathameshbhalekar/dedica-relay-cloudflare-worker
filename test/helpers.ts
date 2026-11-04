@@ -41,7 +41,7 @@ export interface Call {
 type Handler = (url: URL, init?: RequestInit) => Response | Promise<Response>;
 
 /** An Edge whose Dedica and origin calls are fakes. Dedica's policy is `current`, served by default. */
-export function harness(options: { policy?: Policy | null; serve?: Handler; now?: () => number } = {}) {
+export function harness(options: { policy?: Policy | null; serve?: Handler; origin?: (request: Request) => Response; now?: () => number } = {}) {
   const calls: Call[] = [];
   const originCalls: Request[] = [];
   const state = { policy: options.policy === undefined ? policy() : options.policy, policyStatus: 200 };
@@ -61,6 +61,7 @@ export function harness(options: { policy?: Policy | null; serve?: Handler; now?
     },
     originFetch: async (request) => {
       originCalls.push(request);
+      if (options.origin) return options.origin(request);
       return new Response("origin page", { status: 200, headers: { "content-type": "text/html" } });
     },
   });

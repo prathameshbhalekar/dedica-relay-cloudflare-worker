@@ -113,6 +113,8 @@ export function mightBeArtifact(pathname: string): boolean {
     pathname === "/llms-full.txt" ||
     pathname === "/agents.md" ||
     pathname === "/openapi.json" ||
+    pathname === "/mcp/server-card" ||
+    pathname.endsWith("/llms.txt") ||
     pathname.startsWith("/.well-known/") ||
     pathname.endsWith(".md")
   );
@@ -125,6 +127,8 @@ export function needsPolicy(request: Request, pathname: string, policy: Policy |
   if (request.headers.get(ORIGIN_FETCH_HEADER) === "1") return false;
   if (mightBeArtifact(pathname)) return true;
   if (ASSET_RE.test(pathname)) return false;
+  // `?mode=agent` is an explicit ask for the agent version, even from a browser.
+  if (new URL(request.url).searchParams.get("mode") === "agent") return true;
   if (isBrowserNavigation(request.headers)) return false;
   if ((request.headers.get("accept") ?? "").includes("text/markdown")) return true;
   if (policy) return detectAgent(request.headers, policy.detection);

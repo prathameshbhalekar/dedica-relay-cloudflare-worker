@@ -99,8 +99,9 @@ export function createQueryProxy(env: Env, ports: QueryPorts) {
           ...(extra["retry-after"] ? { retry_after: Number(extra["retry-after"]) } : {}),
         },
       };
+      // `/ask` failures also carry NLWeb's `_meta`, so an NLWeb client reads them as a `failure`.
       const payload =
-        route.protocol === "ask" ? failure : { jsonrpc: "2.0", id: null, error: { code: -32000, message: failure.error.message, data: { code, status } } };
+        route.protocol === "ask" ? { _meta: { response_type: "failure", version: "0.55" }, ...failure } : { jsonrpc: "2.0", id: null, error: { code: -32000, message: failure.error.message, data: { code, status } } };
       const response = new Response(JSON.stringify(payload), {
         status,
         headers: { "content-type": "application/json", "cache-control": "private, no-store", ...extra },
@@ -128,7 +129,9 @@ export function createQueryProxy(env: Env, ports: QueryPorts) {
 
       const base = queryTarget(query.baseUrl, env);
       if (!base) return reply(503, "QUERY_UNAVAILABLE");
-      const target = new URL(`${base.pathname.replace(/\/+$/, "")}${route.path}`, base.origin);
+      // NLWeb `POST /ask` has its own Dedica API next to `GET /ask` (one operation per API).
+      const suffix = route.protocol === "ask" && request.method === "POST" ? `${route.path}/nlweb` : route.path;
+      const target = new URL(`${base.pathname.replace(/\/+$/, "")}${suffix}`, base.origin);
       target.search = url.search;
       const response = await proxy(request, target.toString(), env, ports, reply);
       queryResponses.add(response);

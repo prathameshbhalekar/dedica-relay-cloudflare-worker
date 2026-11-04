@@ -45,7 +45,8 @@ export interface Twins {
 
 export interface Artifact {
   path: string;
-  action?: "proxy" | "block" | "passthrough";
+  /** `fallback`: the origin's own file wins (a non-HTML 2xx, or any 3xx); otherwise Dedica's. */
+  action?: "proxy" | "fallback" | "block" | "passthrough";
   contentType: string;
   version?: string;
 }

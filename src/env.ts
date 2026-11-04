@@ -1,7 +1,7 @@
 import type { Env } from "./types";
 
 export const MIDDLEWARE = "cloudflare-worker";
-export const VERSION = "1.0.0";
+export const VERSION = "1.1.0";
 /** Identifies this worker to Dedica: `<name>/<version>`. */
 export const TRANSMITTER = `${MIDDLEWARE}/${VERSION}`;
 

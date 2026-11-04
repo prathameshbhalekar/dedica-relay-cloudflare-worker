@@ -8,8 +8,10 @@ What it does:
 - serves `/.well-known/dedica.json` and sends a heartbeat every 5 minutes (cron);
 - fetches your site's policy from Dedica (cached ~30 s) and recognises AI agents;
 - in `autopilot` mode, serves agent versions of your pages (`/pricing.md`, or the page itself for a
-  detected agent) and Dedica-managed files (`/llms.txt`, ...) from Dedica, and proxies `/ask` and
-  `/mcp` once Dedica enables them. In `report` mode it passes everything through.
+  detected agent or `?mode=agent`) and Dedica-managed files (`/llms.txt`, ...) from Dedica, serves
+  discovery files (`/openapi.json`, `/.well-known/ard.json`, ...) only where your origin has none, gives
+  agents a markdown body on your 404s, and proxies `/ask` (GET, and NLWeb POST) and `/mcp` once Dedica
+  enables them. In `report` mode it passes everything through.
 
 **Fail-safe:** people, browsers and search engines always get your normal page; every call to Dedica
 has a timeout; anything unexpected (Dedica slow, down, no content for a path) falls back to your origin.

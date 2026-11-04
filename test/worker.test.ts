@@ -22,7 +22,7 @@ describe("connectivity", () => {
   it("serves the well-known file without calling Dedica", async () => {
     const { edge, calls } = harness();
     const res = await edge.fetch(get("/.well-known/dedica.json"), env, new FakeCtx());
-    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.0.0" });
+    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.1.0" });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(calls).toHaveLength(0);
   });
@@ -39,7 +39,7 @@ describe("connectivity", () => {
     await edge.heartbeat(env);
     expect(calls[0].url).toBe(`${API}/api/v1/middleware/heartbeat/`);
     expect(header(calls[0], "x-dedica-middleware-token")).toBe("dm_test");
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.0.0" });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.1.0" });
   });
 
   it("passes everything through when not configured", async () => {
@@ -165,6 +165,71 @@ describe("autopilot serving", () => {
   });
 });
 
+describe("discovery files and agent extras", () => {
+  const fallbackPolicy = () =>
+    policy({ artifacts: [{ path: "/openapi.json", contentType: "application/json", action: "fallback", version: "3" }, { path: "/llms.txt", contentType: "text/plain", action: "proxy" }] });
+  const spec = () => Response.json({ openapi: "3.1.0", from: "dedica" });
+
+  it("serves a fallback artifact from Dedica when the origin has no such file", async () => {
+    for (const origin of [new Response("missing", { status: 404 }), new Response("<html>app</html>", { status: 200, headers: { "content-type": "text/html" } })]) {
+      const { edge, calls, originCalls } = harness({ policy: fallbackPolicy(), serve: () => spec(), origin: () => origin.clone() });
+      const res = await edge.fetch(get("/openapi.json", browserHeaders), env, new FakeCtx());
+      expect(await res.json()).toEqual({ openapi: "3.1.0", from: "dedica" });
+      expect(res.headers.get("x-dedica-served")).toBe("1");
+      expect(originCalls).toHaveLength(1);
+      expect(header(serveCalls(calls)[0], "x-dedica-version")).toBe("v1:3");
+    }
+  });
+
+  it("keeps the customer's own file at a fallback path", async () => {
+    for (const origin of [Response.json({ openapi: "3.0.0", from: "customer" }), new Response(null, { status: 301, headers: { location: "/api/openapi.json" } })]) {
+      const { edge, calls } = harness({ policy: fallbackPolicy(), serve: () => spec(), origin: () => origin.clone() });
+      const res = await edge.fetch(get("/openapi.json", browserHeaders), env, new FakeCtx());
+      expect(res.status).toBe(origin.status);
+      expect(res.headers.get("x-dedica-served")).toBeNull();
+      expect(serveCalls(calls)).toHaveLength(0);
+    }
+  });
+
+  it("returns the origin's answer when neither has the file", async () => {
+    const { edge } = harness({ policy: fallbackPolicy(), origin: () => new Response("missing", { status: 404 }) });
+    const res = await edge.fetch(get("/openapi.json", browserHeaders), env, new FakeCtx());
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe("missing");
+  });
+
+  it("serves the agent version of a page to anyone asking for ?mode=agent, but not to search engines", async () => {
+    const { edge, calls } = harness({ serve: () => markdown() });
+    const res = await edge.fetch(get("/?mode=agent", browserHeaders), env, new FakeCtx());
+    expect(await res.text()).toBe("# Pricing\n");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    const call = serveCalls(calls)[0];
+    expect(header(call, "x-dedica-category")).toBe("eligible");
+    expect(new URL(call.url).search).toBe("?mode=agent");
+    expect(await (await edge.fetch(get("/?mode=agent", { "user-agent": GOOGLEBOT_UA }), env, new FakeCtx())).text()).toBe("origin page");
+  });
+
+  it("gives agents a markdown 404 and keeps the status", async () => {
+    const p = policy({ artifacts: [{ path: "/llms.txt", contentType: "text/plain", action: "proxy" }] });
+    const { edge } = harness({ policy: p, origin: () => new Response("<h1>Nope</h1>", { status: 404, headers: { "content-type": "text/html" } }) });
+    const ctx = new FakeCtx();
+    // Warm the policy (the 404 rewrite never waits for one).
+    await edge.fetch(get("/llms.txt", browserHeaders), env, ctx);
+
+    const res = await edge.fetch(get("/no-such-page", { "user-agent": "curl/8.0", accept: "text/markdown" }), env, ctx);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
+    const body = await res.text();
+    expect(body).toContain("There is no page at `/no-such-page`");
+    expect(body).toContain("https://shop.example/llms.txt");
+
+    const person = await edge.fetch(get("/no-such-page", browserHeaders), env, ctx);
+    expect(await person.text()).toBe("<h1>Nope</h1>");
+    const google = await edge.fetch(get("/no-such-page", { "user-agent": GOOGLEBOT_UA }), env, ctx);
+    expect(await google.text()).toBe("<h1>Nope</h1>");
+  });
+});
+
 describe("serve target", () => {
   const server = new Server(async () => new Response());
   const p = policy();
@@ -269,6 +334,20 @@ describe("query routes", () => {
     await edge.fetch(get("/ask?q=how+much"), env, new FakeCtx());
     expect(calls.map((c) => c.url)).toEqual(expect.arrayContaining([`${API}/api/v1/middleware/query/mcp`, `${API}/api/v1/middleware/query/ask?q=how+much`]));
     expect(originCalls).toHaveLength(0);
+  });
+
+  it("sends NLWeb POST /ask to Dedica's ask/nlweb API and labels /ask failures for NLWeb", async () => {
+    const query = { askPath: "/ask", mcpPath: "/mcp", baseUrl: `${API}/api/v1/middleware/query`, enabled: { mcp: false, ask: true }, requestsPerMinute: 1 };
+    const { edge, calls } = harness({ policy: policy({ query }) });
+    const body = JSON.stringify({ query: { text: "how much?" } });
+    await edge.fetch(get("/ask", { "content-type": "application/json", accept: "text/event-stream", "cf-connecting-ip": "5.6.7.8" }, { method: "POST", body }), env, new FakeCtx());
+    const proxied = calls.find((c) => c.url === `${API}/api/v1/middleware/query/ask/nlweb`);
+    expect(proxied?.init?.method).toBe("POST");
+    expect((proxied?.init?.headers as Headers).get("accept")).toBe("text/event-stream");
+
+    const limited = await edge.fetch(get("/ask", { "cf-connecting-ip": "5.6.7.8" }, { method: "POST", body }), env, new FakeCtx());
+    expect(limited.status).toBe(429);
+    expect(((await limited.json()) as { _meta: { response_type: string } })._meta.response_type).toBe("failure");
   });
 
   it("rate-limits query visitors and rejects wrong methods", async () => {

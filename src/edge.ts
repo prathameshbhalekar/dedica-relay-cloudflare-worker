@@ -4,6 +4,7 @@ import {
   HEARTBEAT_TIMEOUT_MS,
   MIDDLEWARE,
   ORIGIN_FETCH_HEADER,
+  SERVED_HEADER,
   STATUS_PATH,
   TOKEN_HEADER,
   TRANSMITTER,
@@ -20,6 +21,9 @@ import { Server } from "./serve";
 import type { Artifact, Ctx, Env, Policy } from "./types";
 
 const TEXT = "text/plain; charset=utf-8";
+const MARKDOWN = "text/markdown; charset=utf-8";
+/** `?mode=agent` asks for the agent version of any page, like `Accept: text/markdown`. */
+const AGENT_MODE_PARAM = "mode";
 
 export interface EdgeOptions {
   /** Calls to Dedica (and nothing else). */
@@ -71,7 +75,40 @@ export class Edge {
       return null;
     });
     if (served) return served;
-    return this.originFetch(request);
+    const response = await this.originFetch(request);
+    try {
+      return this.agentNotFound(request, env, response) ?? response;
+    } catch {
+      return response;
+    }
+  }
+
+  /** The origin's 404/410, with a markdown body for an agent so it knows where to go next (status kept). */
+  private agentNotFound(request: Request, env: Env, response: Response): Response | null {
+    if (response.status !== 404 && response.status !== 410) return null;
+    if ((request.method !== "GET" && request.method !== "HEAD") || !configured(env)) return null;
+    if (request.headers.get(ORIGIN_FETCH_HEADER) === "1") return null;
+    const p = this.policies.policy;
+    if (!p || p.mode !== "autopilot") return null;
+    const ua = userAgent(request.headers);
+    const url = new URL(request.url);
+    const wantsMarkdown = (request.headers.get("accept") ?? "").includes("text/markdown");
+    if (isTraditionalBot(ua, p.detection) || !(wantsMarkdown || detectAgent(request.headers, p.detection))) return null;
+    if ((response.headers.get("content-type") ?? "").includes("text/markdown")) return null;
+
+    const lines = [
+      "# Not found",
+      "",
+      `There is no page at \`${url.pathname}\` on ${url.host} (HTTP ${response.status}).`,
+      "",
+      ...(p.artifacts.some((a) => a.path === "/llms.txt") ? [`- An index of this site's pages for agents: ${url.origin}/llms.txt`] : []),
+      `- The home page: ${url.origin}/`,
+    ];
+    void response.body?.cancel().catch(() => {});
+    return new Response(request.method === "HEAD" ? null : `${lines.join("\n")}\n`, {
+      status: response.status,
+      headers: { "content-type": MARKDOWN, "cache-control": "private, no-store", vary: "accept, user-agent", [SERVED_HEADER]: "1" },
+    });
   }
 
   private queryProxyFor(env: Env) {
@@ -113,9 +150,10 @@ export class Edge {
     const questionParams = p.twins.questionParams ?? [];
     const asksQuestion =
       questionParams.some((key) => Boolean(url.searchParams.get(key)?.trim())) || (questionParams.length > 0 && /~~.+/.test(url.pathname));
+    const agentMode = url.searchParams.get(AGENT_MODE_PARAM) === "agent";
 
-    // 3. Search engines, link previews and (unknown) crawlers keep the person's page.
-    if (keepHumanPage(ua, p.detection, asksQuestion)) return null;
+    // 3. Search engines, link previews and (unknown) crawlers keep the person's page, unless they ask for agent mode.
+    if (keepHumanPage(ua, p.detection, asksQuestion || agentMode)) return null;
 
     // 4. An explicit markdown request (`/pricing.md`), for anyone who asks.
     if (p.twins.enabled && url.pathname.endsWith(p.twins.suffix)) {
@@ -125,9 +163,9 @@ export class Edge {
       return this.server.fromDedica(p, env, { path: url.pathname, search: url.search, category: "public" }, TEXT, !asked, request);
     }
 
-    // 5. The agent version of a page, for a detected agent or a client asking for `text/markdown`.
+    // 5. The agent version of a page, for a detected agent, a client asking for `text/markdown`, or `?mode=agent`.
     //    Never for a search engine. If Dedica has none for the page, the origin answers.
-    const wantsMarkdown = (request.headers.get("accept") ?? "").includes("text/markdown");
+    const wantsMarkdown = (request.headers.get("accept") ?? "").includes("text/markdown") || agentMode;
     if (p.twins.negotiate && !traditional && twinEligible(url.pathname, p.twins) && (wantsMarkdown || detectAgent(request.headers, p.detection))) {
       return this.server.fromDedica(p, env, { path: url.pathname, search: url.search, category: "eligible" }, TEXT, false, request);
     }
@@ -138,11 +176,36 @@ export class Edge {
     switch (artifact.action ?? "proxy") {
       case "proxy":
         return this.server.fromDedica(p, env, { path: artifact.path, version: artifact.version, category: "public" }, artifact.contentType, true, request);
+      case "fallback":
+        return this.fallback(p, env, artifact, request);
       case "block":
         return new Response("Not available to this client.", { status: 403 });
       default:
         return null;
     }
+  }
+
+  /** The origin's own file when it has one, else Dedica's, else the origin's answer after all. */
+  private async fallback(p: Policy, env: Env, artifact: Artifact, request: Request): Promise<Response> {
+    const origin = await this.originFetch(request).catch(() => null);
+    if (origin && originHasFile(origin)) return origin;
+    try {
+      const served = await this.server.fromDedica(
+        p,
+        env,
+        { path: artifact.path, version: artifact.version, category: "public" },
+        artifact.contentType,
+        true,
+        request,
+      );
+      if (served) {
+        void origin?.body?.cancel().catch(() => {});
+        return served;
+      }
+    } catch (error) {
+      console.warn(`[dedica] serving failed; using origin: ${error}`);
+    }
+    return origin ?? this.originFetch(request);
   }
 
   async heartbeat(env: Env): Promise<void> {
@@ -162,6 +225,13 @@ export class Edge {
       console.warn(`[dedica] heartbeat request failed: ${err}`);
     }
   }
+}
+
+/** A real file at the origin: any redirect, or a 2xx that isn't an HTML page (a single-page app answers every path). */
+function originHasFile(response: Response): boolean {
+  if (response.status >= 300 && response.status < 400) return true;
+  if (response.status < 200 || response.status >= 300) return false;
+  return !(response.headers.get("content-type") ?? "").toLowerCase().includes("text/html");
 }
 
 /** Whether the visitor asked a declared question: that answer is never shared-cached. */
