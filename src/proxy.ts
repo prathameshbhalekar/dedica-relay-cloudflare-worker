@@ -8,7 +8,7 @@
  */
 
 import { readCapped } from "./body";
-import { apiBase, dedicaHeaders } from "./env";
+import { CONTENT_FALLBACK_HEADER, apiBase, dedicaHeaders } from "./env";
 import type { Env, Policy } from "./types";
 
 const PROXY_BODY_MAX = 32_768;
@@ -106,7 +106,14 @@ async function forward(
       redirect: "manual",
       signal: controller.signal,
     });
-    const headers = new Headers({ "cache-control": "private, no-store", "x-dedica-served": "1", "x-accel-buffering": "no" });
+    // Dedica declines this one: the origin answers (it still has the original body, this was a clone).
+    if (upstream.headers.get(CONTENT_FALLBACK_HEADER) === "origin") {
+      controller.abort();
+      cleanup();
+      void upstream.body?.cancel().catch(() => {});
+      return null;
+    }
+    const headers =new Headers({ "cache-control": "private, no-store", "x-dedica-served": "1", "x-accel-buffering": "no" });
     for (const name of ["content-type", "retry-after", "allow", "mcp-protocol-version", "mcp-session-id", "vary"]) {
       const value = upstream.headers.get(name);
       if (value) headers.set(name, value);

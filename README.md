@@ -17,6 +17,17 @@ What it does:
 **Fail-safe:** people, browsers and search engines always get your normal page; every call to Dedica
 has a timeout; anything unexpected (Dedica slow, down, no content for a path) falls back to your origin.
 
+- API calls and a page's sub-requests are never sent to Dedica: requests with `Authorization`, a cookie,
+  `Range`, `Upgrade` or `X-Requested-With`, a browser `fetch()`, a JSON `Accept`, or a static file always get
+  your origin's answer directly.
+- The agent version of a normal page URL waits at most 1.5 s for Dedica. When a call to Dedica fails, every
+  other request still waiting on it is released to your origin at once, and Dedica is left alone for 15 s.
+- Dedica can hand any request back to your origin (`x-dedica-content-fallback: origin`).
+- A malformed policy only ever serves less: empty or invalid entries are dropped, the cache TTL is kept to
+  5–300 s, and a policy without a usable mode or detection settings serves nothing.
+- **Kill switch:** set the variable `DEDICA_DISABLED=1` and the worker passes every request straight to your
+  origin, untouched and unreported, with no calls to Dedica. `/__dedica/status` shows `"disabled": true`.
+
 ## Traffic reporting
 
 The worker reports every page load to Dedica, from people, AI agents and bots alike (`src/analytics.ts`), so Dedica can
@@ -80,6 +91,8 @@ in `package.json`.
 | `DEDICA_MIDDLEWARE_TOKEN` | **secret** (`wrangler secret put`) |
 | `DEDICA_QUERY_ORIGIN` | optional: the only origin `/ask`/`/mcp` may be proxied to (defaults to `DEDICA_API_URL`'s) |
 | `DEDICA_POLICY_URL` | optional: policy URL override (testing) |
+| `DEDICA_SALT` | optional **secret**: salt for the visitor pseudonym (without it, none is sent) |
+| `DEDICA_DISABLED` | optional kill switch: `1` and the worker only passes traffic through |
 
 Logs are prefixed `[dedica]` (`npx wrangler tail`).
 

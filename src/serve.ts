@@ -5,7 +5,7 @@
  */
 
 import { readCapped } from "./body";
-import { CATEGORY_HEADER, SERVED_HEADER, SERVE_TIMEOUT_MS, VERSION_HEADER, dedicaInit } from "./env";
+import { CATEGORY_HEADER, CONTENT_FALLBACK_HEADER, SERVED_HEADER, SERVE_TIMEOUT_MS, VERSION_HEADER, dedicaInit } from "./env";
 import type { FetchFn } from "./policy";
 import type { Env, Policy } from "./types";
 
@@ -19,19 +19,26 @@ export interface ServeInput {
   version?: string;
   /** `public`: same for everyone (`/llms.txt`, `/pricing.md`). `eligible`: agent version of a page URL. */
   category?: "public" | "eligible";
+  /** How long Dedica may take to answer, and then to send the body (default SERVE_TIMEOUT_MS / 10 s). */
+  timeoutMs?: number;
 }
 
 export class Server {
   private backoffUntil = 0;
   private identity = "";
+  /** Shared by every call in flight: one failure aborts them all, so a stalled Dedica holds no request longer. */
+  private circuit = new AbortController();
 
   constructor(
     private readonly fetchFn: FetchFn,
     private readonly now: () => number = Date.now,
   ) {}
 
+  /** Backs off, and releases every other call still waiting on Dedica (each falls back to the origin). */
   private failed(): void {
     this.backoffUntil = this.now() + SERVE_BACKOFF_MS;
+    this.circuit.abort(new Error("dedica serving backed off"));
+    this.circuit = new AbortController();
   }
 
   /** The Dedica URL for a path on the customer's domain, or null (serving off, backing off, or an unsafe path). */
@@ -65,12 +72,23 @@ export class Server {
     const target = this.target(policy, input);
     if (!target) return null;
 
-    const headers = { ...requestHeaders(request, shared), [VERSION_HEADER]: target.version, [CATEGORY_HEADER]: input.category ?? "eligible" };
-    const upstream = await this.fetchFn(target.url, dedicaInit(env, SERVE_TIMEOUT_MS, { headers, redirect: "manual" })).catch((error: unknown) => {
-      this.failed();
+    const timeoutMs = input.timeoutMs ?? SERVE_TIMEOUT_MS;
+    const circuit = this.circuit.signal;
+    // A call released by another's failure doesn't count as a failure of its own.
+    const fail = (error: unknown): never => {
+      if (!circuit.aborted) this.failed();
       throw error;
-    });
+    };
+    const headers = { ...requestHeaders(request, shared), [VERSION_HEADER]: target.version, [CATEGORY_HEADER]: input.category ?? "eligible" };
+    const init = dedicaInit(env, timeoutMs, { headers, redirect: "manual" });
+    init.signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), circuit]);
+    const upstream = await this.fetchFn(target.url, init).catch(fail);
 
+    // Dedica declines this one: the origin answers, and nothing is wrong (no backoff).
+    if (upstream.headers.get(CONTENT_FALLBACK_HEADER) === "origin") {
+      await upstream.body?.cancel().catch(() => {});
+      return null;
+    }
     if (upstream.status !== 200 && upstream.status !== 428 && upstream.status !== 304) {
       // 404: Dedica has nothing here (normal). Auth and server errors back off for a while.
       if (upstream.status === 401 || upstream.status === 403 || upstream.status >= 500) {
@@ -86,10 +104,7 @@ export class Server {
     const body =
       upstream.status === 304 || request.method === "HEAD"
         ? null
-        : await readServingBody(upstream).catch((error: unknown) => {
-            this.failed();
-            throw error;
-          });
+        : await readServingBody(upstream, AbortSignal.any([AbortSignal.timeout(Math.min(timeoutMs, BODY_DEADLINE_MS)), circuit])).catch(fail);
     return new Response(body, { status: upstream.status, headers: responseHeaders(upstream, contentType, shared) });
   }
 }
@@ -129,9 +144,12 @@ function responseHeaders(upstream: Response, contentType: string, shared: boolea
   return headers;
 }
 
-/** Reads a served body, refusing anything over 8 MB or slower than 10 s. */
-export async function readServingBody(response: Response): Promise<Uint8Array> {
-  if (Number(response.headers.get("content-length")) > MAX_SERVED_BYTES) throw new Error("dedica document exceeds serving limit");
+/** Reads a served body, refusing anything over 8 MB or slower than `signal` allows (default 10 s). */
+export async function readServingBody(response: Response, signal: AbortSignal = AbortSignal.timeout(BODY_DEADLINE_MS)): Promise<Uint8Array> {
+  if (Number(response.headers.get("content-length")) > MAX_SERVED_BYTES) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error("dedica document exceeds serving limit");
+  }
   if (!response.body) return new Uint8Array(0);
-  return readCapped(response.body, MAX_SERVED_BYTES, AbortSignal.timeout(BODY_DEADLINE_MS));
+  return readCapped(response.body, MAX_SERVED_BYTES, signal);
 }

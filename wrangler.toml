@@ -15,6 +15,9 @@ DEDICA_SITE_ID = ""
 DEDICA_API_URL = "https://api.getdedica.com"
 # Optional: the only origin /ask and /mcp may be proxied to (defaults to DEDICA_API_URL's origin).
 # DEDICA_QUERY_ORIGIN = ""
+# Kill switch: "1" and the worker passes every request straight to your origin, with no calls to Dedica.
+# Flip it in the dashboard (Settings -> Variables) during an incident instead of removing the route.
+# DEDICA_DISABLED = "1"
 
 # Secret, never in this file:  npx wrangler secret put DEDICA_MIDDLEWARE_TOKEN
 # Optional secret: salt for the daily visitor pseudonym in traffic reports (without it, no pseudonym is sent).

@@ -3,6 +3,7 @@
 import {
   HEARTBEAT_TIMEOUT_MS,
   MIDDLEWARE,
+  NEGOTIATE_TIMEOUT_MS,
   ORIGIN_FETCH_HEADER,
   STATUS_PATH,
   VERSION,
@@ -10,9 +11,10 @@ import {
   configured,
   dedicaInit,
   dedicaUrl,
+  disabled,
 } from "./env";
 import { Reporter, type Trace, buildEvent, isReportable } from "./analytics";
-import { detectAgent, isTraditionalBot, keepHumanPage, needsPolicy, twinEligible, userAgent } from "./detect";
+import { detectAgent, isTraditionalBot, keepHumanPage, needsPolicy, negotiable, twinEligible, userAgent } from "./detect";
 import { type FetchFn, PolicyStore } from "./policy";
 import { proxyRequest } from "./proxy";
 import { Server } from "./serve";
@@ -73,16 +75,25 @@ export class Edge {
     ctx.passThroughOnException?.();
     const url = new URL(request.url);
 
-    if (request.method === "GET" && url.pathname === WELL_KNOWN_PATH) {
+    // Read-only configuration check: no secrets, no calls to Dedica. Answers even when disabled, to show it.
+    if (request.method === "GET" && url.pathname === STATUS_PATH) {
       return Response.json(
-        { site_id: env.DEDICA_SITE_ID ?? null, middleware: MIDDLEWARE, version: VERSION },
+        {
+          configured: configured(env),
+          disabled: disabled(env),
+          siteId: env.DEDICA_SITE_ID || null,
+          mode: this.policies.policy?.mode ?? null,
+          version: VERSION,
+        },
         { headers: { "cache-control": "no-store" } },
       );
     }
-    // Read-only configuration check: no secrets, no calls to Dedica.
-    if (request.method === "GET" && url.pathname === STATUS_PATH) {
+    // Kill switch: everything goes to the origin untouched, unreported, with no call to Dedica.
+    if (disabled(env)) return this.originFetch(request);
+
+    if (request.method === "GET" && url.pathname === WELL_KNOWN_PATH) {
       return Response.json(
-        { configured: configured(env), siteId: env.DEDICA_SITE_ID || null, mode: this.policies.policy?.mode ?? null, version: VERSION },
+        { site_id: env.DEDICA_SITE_ID ?? null, middleware: MIDDLEWARE, version: VERSION },
         { headers: { "cache-control": "no-store" } },
       );
     }
@@ -161,10 +172,12 @@ export class Edge {
     }
 
     // 5. The agent version of a page, for a detected agent or a client asking for `text/markdown`.
-    //    Never for a search engine. If Dedica has none for the page, the origin answers.
+    //    Never for a search engine, an API call or a page's sub-request (see `negotiable`), and never a long wait:
+    //    the client asked for the origin's page. If Dedica has none for the page, the origin answers.
+    if (!p.twins.negotiate || !negotiable(request, url.pathname)) return null;
     const wantsAgentVersion = visit.acceptsMarkdown || detectAgent(request.headers, p.detection);
-    if (p.twins.negotiate && !isTraditionalBot(ua, p.detection) && twinEligible(url.pathname, p.twins) && wantsAgentVersion) {
-      const input = { path: url.pathname, search: url.search, category: "eligible" } as const;
+    if (!isTraditionalBot(ua, p.detection) && twinEligible(url.pathname, p.twins) && wantsAgentVersion) {
+      const input = { path: url.pathname, search: url.search, category: "eligible", timeoutMs: NEGOTIATE_TIMEOUT_MS } as const;
       return served("negotiated", "eligible", await this.server.fromDedica(p, env, input, TEXT, false, request));
     }
     return null;
@@ -205,6 +218,10 @@ export class Edge {
   }
 
   async heartbeat(env: Env): Promise<void> {
+    if (disabled(env)) {
+      console.warn("[dedica] heartbeat skipped: DEDICA_DISABLED is set");
+      return;
+    }
     if (!configured(env)) {
       console.warn("[dedica] heartbeat skipped: DEDICA_SITE_ID, DEDICA_API_URL or DEDICA_MIDDLEWARE_TOKEN is not set");
       return;

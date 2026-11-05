@@ -12,6 +12,8 @@ export interface Env {
   DEDICA_QUERY_ORIGIN?: string;
   /** Optional secret: salt for the daily visitor pseudonym in traffic reports. Without it, no pseudonym is sent. */
   DEDICA_SALT?: string;
+  /** Optional kill switch: `1` and the worker passes every request straight to the origin, untouched and unreported. */
+  DEDICA_DISABLED?: string;
 }
 
 /** Minimal slice of ExecutionContext the worker uses (lets tests pass a plain object). */

@@ -30,8 +30,11 @@ function needles(d: Detection): Needle[] {
   return indexed;
 }
 
+/** Longer user agents are cut before any matching, so a policy pattern never runs over an attacker-sized string. */
+export const UA_MATCH_MAX = 512;
+
 export function userAgent(headers: Headers): string {
-  return (headers.get("user-agent") ?? "").toLowerCase();
+  return (headers.get("user-agent") ?? "").slice(0, UA_MATCH_MAX).toLowerCase();
 }
 
 /** The longest user-agent needle in the user agent, if any. */
@@ -151,11 +154,32 @@ export function mightBeArtifact(pathname: string): boolean {
 
 const ASSET_RE = /\.(?:js|mjs|css|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|eot|map|webp|avif|mp4|webm|mp3|wav|pdf)$/i;
 
+/** Headers that mark an API call, a session, a partial download or a protocol switch: never a page read. */
+const NOT_A_PAGE_HEADERS = ["authorization", "cookie", "upgrade", "range", "x-requested-with"];
+const PAGE_DESTS = new Set(["document", "iframe", "frame"]);
+
+/**
+ * Whether a request at a normal URL may get Dedica's agent version at all. Anything that looks like an API call or
+ * a page's sub-request always gets the origin's answer, without asking Dedica: a static file, a request carrying
+ * credentials, a cookie, a range or an upgrade, a browser's non-page fetch, or an `Accept` that asks for JSON
+ * rather than a page.
+ */
+export function negotiable(request: Request, pathname: string): boolean {
+  const h = request.headers;
+  if (ASSET_RE.test(pathname)) return false;
+  if (NOT_A_PAGE_HEADERS.some((name) => h.has(name))) return false;
+  const dest = h.get("sec-fetch-dest");
+  if (dest !== null && !PAGE_DESTS.has(dest)) return false;
+  const accept = (h.get("accept") ?? "").toLowerCase();
+  if (accept.includes("json") && !accept.includes("text/html") && !accept.includes("text/markdown")) return false;
+  return true;
+}
+
 /** Only traffic Dedica may answer waits for a missing policy; everything else passes straight through. */
 export function needsPolicy(request: Request, pathname: string, policy: Policy | null): boolean {
   if (request.headers.get(ORIGIN_FETCH_HEADER) === "1") return false;
   if (mightBeArtifact(pathname)) return true;
-  if (ASSET_RE.test(pathname)) return false;
+  if (!negotiable(request, pathname)) return false;
   if (isBrowserNavigation(request.headers)) return false;
   if ((request.headers.get("accept") ?? "").includes("text/markdown")) return true;
   if (policy) return detectAgent(request.headers, policy.detection);

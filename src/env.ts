@@ -15,6 +15,8 @@ export const CATEGORY_HEADER = "x-dedica-category";
 export const SERVED_HEADER = "x-dedica-served";
 /** Sent by Dedica's own crawler: always answer with the origin's page, never Dedica's. */
 export const ORIGIN_FETCH_HEADER = "x-dedica-origin-fetch";
+/** On a Dedica response, `origin`: Dedica declines this request, and the origin answers it instead. */
+export const CONTENT_FALLBACK_HEADER = "x-dedica-content-fallback";
 
 /** The settings format this worker understands. Anything else is ignored safely. */
 export const SCHEMA_MAJOR = 1;
@@ -22,6 +24,8 @@ export const SCHEMA_MAJOR = 1;
 /** Every call to Dedica is abandoned after this long and the origin answers instead. */
 export const POLICY_TIMEOUT_MS = 4_000;
 export const SERVE_TIMEOUT_MS = 10_000;
+/** The agent version of a normal page URL: the client asked for the page, not for Dedica, so it never waits long. */
+export const NEGOTIATE_TIMEOUT_MS = 1_500;
 export const HEARTBEAT_TIMEOUT_MS = 5_000;
 export const EVENTS_TIMEOUT_MS = 5_000;
 
@@ -38,6 +42,11 @@ export function dedicaUrl(env: Env, endpoint: "policy" | "heartbeat" | "events")
 /** The headers that identify this worker to Dedica. */
 export function dedicaHeaders(env: Env): Record<string, string> {
   return { [TOKEN_HEADER]: env.DEDICA_MIDDLEWARE_TOKEN ?? "", [TRANSMITTER_HEADER]: TRANSMITTER };
+}
+
+/** The customer's kill switch: `DEDICA_DISABLED=1` (or `true`/`yes`) and the worker only passes traffic through. */
+export function disabled(env: Env): boolean {
+  return /^(?:1|true|yes|on)$/i.test((env.DEDICA_DISABLED ?? "").trim());
 }
 
 /** Whether the worker has what it needs to talk to Dedica at all. */
