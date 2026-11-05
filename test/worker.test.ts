@@ -24,7 +24,7 @@ describe("connectivity", () => {
   it("serves the well-known file without calling Dedica", async () => {
     const { edge, calls } = harness();
     const res = await edge.fetch(get("/.well-known/dedica.json"), env, new FakeCtx());
-    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.3.0" });
+    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.3.1" });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(calls).toHaveLength(0);
   });
@@ -41,7 +41,7 @@ describe("connectivity", () => {
     await edge.heartbeat(env);
     expect(calls[0].url).toBe(`${API}/api/v1/middleware/heartbeat/`);
     expect(header(calls[0], "x-dedica-middleware-token")).toBe("dm_test");
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.3.0" });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.3.1" });
   });
 
   it("passes everything through when not configured", async () => {
@@ -300,7 +300,7 @@ describe("proxied paths", () => {
   const ASK: Proxy = { path: "/ask", targets: { GET: `${BASE}/ask`, POST: `${BASE}/ask/nlweb` } };
   const MCP: Proxy = { path: "/mcp", targets: { POST: `${BASE}/mcp` } };
 
-  /** A harness whose isolate already has the policy (the first request on a cold isolate passes through). */
+  /** A harness whose isolate already has the policy. */
   async function warm(proxies: Proxy[]) {
     const h = harness({ policy: policy({ proxies }) });
     await h.edge.policies.refresh(env);
@@ -346,10 +346,47 @@ describe("proxied paths", () => {
     expect(await (await edge.fetch(post("/evil"), env, new FakeCtx())).text()).toBe("origin page");
   });
 
-  it("passes through on a cold isolate (no policy yet)", async () => {
-    const { edge, originCalls } = harness({ policy: policy({ proxies: [MCP] }) });
-    expect(await (await edge.fetch(post("/mcp"), env, new FakeCtx())).text()).toBe("origin page");
-    expect(originCalls).toHaveLength(1);
+  it("waits for the policy on a cold isolate, so an agent's first /mcp or /ask call reaches Dedica", async () => {
+    const { edge, calls, originCalls } = harness({ policy: policy({ proxies: [ASK, MCP] }) });
+    const mcp = await edge.fetch(post("/mcp"), env, new FakeCtx());
+    expect(mcp.status).toBe(500); // the fake's answer for a proxied call, relayed
+    expect(originCalls).toHaveLength(0);
+
+    const cold = harness({ policy: policy({ proxies: [ASK, MCP] }) });
+    await cold.edge.fetch(get("/ask/?q=x"), env, new FakeCtx());
+    expect(cold.calls.map((c) => c.url)).toEqual([expect.stringContaining("/policy/"), `${BASE}/ask?q=x`]);
+    expect(cold.originCalls).toHaveLength(0);
+    expect(calls.filter((c) => c.url.includes("/policy/"))).toHaveLength(1);
+  });
+
+  it("passes through on a cold isolate when Dedica can't give a policy, body intact", async () => {
+    const { edge, state, originCalls } = harness({ policy: policy({ proxies: [MCP] }) });
+    state.policyStatus = 503;
+    const res = await edge.fetch(get("/mcp", { "content-type": "application/json" }, { method: "POST", body: '{"id":1}' }), env, new FakeCtx());
+    expect(await res.text()).toBe("origin page");
+    expect(await originCalls[0].text()).toBe('{"id":1}');
+  });
+
+  it("waits for the policy on a cold isolate for any path the policy proxies", async () => {
+    const { edge, calls, originCalls } = harness({ policy: policy({ proxies: [{ path: "/agents/search", targets: { GET: `${BASE}/search` } }] }) });
+    await edge.fetch(get("/agents/search?q=x"), env, new FakeCtx());
+    expect(calls.map((c) => c.url)).toEqual([expect.stringContaining("/policy/"), `${BASE}/search?q=x`]);
+    expect(originCalls).toHaveLength(0);
+  });
+
+  it("makes every request on a cold isolate wait for one shared policy fetch, then answers like a warm one", async () => {
+    const { edge, calls, originCalls } = harness({ policy: policy({ proxies: [MCP] }) });
+    const ctx = new FakeCtx();
+    const results = await Promise.all([
+      edge.fetch(get("/", browserHeaders), env, ctx),
+      edge.fetch(post("/api/orders"), env, ctx),
+      edge.fetch(post("/mcp"), env, ctx),
+    ]);
+    expect(await results[0].text()).toBe("origin page");
+    expect(await results[1].text()).toBe("origin page");
+    expect(results[2].status).toBe(500); // proxied: the fake's answer, relayed
+    expect(calls.filter((c) => c.url.includes("/policy/"))).toHaveLength(1);
+    expect(originCalls).toHaveLength(2);
   });
 
   it("ignores malformed entries", async () => {

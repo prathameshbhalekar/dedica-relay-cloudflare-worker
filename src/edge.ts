@@ -14,7 +14,7 @@ import {
   disabled,
 } from "./env";
 import { Reporter, type Trace, buildEvent, isReportable } from "./analytics";
-import { detectAgent, isTraditionalBot, keepHumanPage, needsPolicy, negotiable, twinEligible, userAgent } from "./detect";
+import { detectAgent, isTraditionalBot, keepHumanPage, negotiable, twinEligible, userAgent } from "./detect";
 import { type FetchFn, PolicyStore } from "./policy";
 import { proxyRequest } from "./proxy";
 import { Server } from "./serve";
@@ -142,12 +142,14 @@ export class Edge {
   private async serve(visit: Visit, env: Env, ctx: Ctx): Promise<Served | null> {
     const { request, url, ua } = visit;
 
+    // Every request waits for a missing policy (at most POLICY_TIMEOUT_MS, shared by all requests waiting on it),
+    // so a cold isolate answers the same as a warm one. Without a policy, the origin answers.
+    const p = await this.policies.get(env, ctx);
+
     // 1. Paths the policy proxies to Dedica (`/ask`, `/mcp`, ...), any method; independent of agent detection.
-    const proxied = await proxyRequest(request, url, await this.policies.get(env, ctx, false), env, this.dedicaFetch);
+    const proxied = await proxyRequest(request, url, p, env, this.dedicaFetch);
     if (proxied) return { response: proxied, outcome: "proxied", category: null };
     if (request.method !== "GET" && request.method !== "HEAD") return null;
-
-    const p = await this.policies.get(env, ctx, needsPolicy(request, url.pathname, this.policies.policy));
     if (!p || p.mode !== "autopilot") return null;
 
     // 2. A file Dedica manages (llms.txt, ...), for every visitor.

@@ -191,16 +191,15 @@ export class PolicyStore {
   }
 
   /**
-   * The policy to use for this request. `blocking`: a request Dedica may answer waits for a missing
-   * policy; any other request never waits and gets null (and so passes through).
+   * The policy to use for this request. A fresh or recently expired one is returned at once (refreshed in the
+   * background); a missing one is waited for (one fetch, shared by every request waiting on it).
    */
-  async get(env: Env, ctx: Ctx, blocking: boolean): Promise<Policy | null> {
+  async get(env: Env, ctx: Ctx): Promise<Policy | null> {
     const now = this.now();
     if (this.policy && now < this.expiry) return this.policy;
     const pending = this.refresh(env);
     ctx.waitUntil(pending);
     if (this.policy && now < this.expiry + POLICY_FAILURE_GRACE_MS) return this.policy;
-    if (!blocking) return null;
     await pending;
     return this.retained();
   }

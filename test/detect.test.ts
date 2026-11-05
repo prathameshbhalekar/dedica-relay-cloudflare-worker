@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { detectAgent, isTraditionalBot, keepHumanPage, needsPolicy, twinEligible } from "../src/detect";
+import { detectAgent, isTraditionalBot, keepHumanPage, twinEligible } from "../src/detect";
 import { BROWSER_UA, GOOGLEBOT_UA, GPTBOT_UA, browserHeaders, get, policy } from "./helpers";
 
 const d = policy().detection;
@@ -78,17 +78,5 @@ describe("twinEligible", () => {
     expect(twinEligible("/docsx", twins)).toBe(false);
     expect(twinEligible("/docs/private/a", twins)).toBe(false);
     expect(twinEligible("/pricing", { ...twins, includePaths: [] })).toBe(true);
-  });
-});
-
-describe("needsPolicy", () => {
-  it("waits for managed files, markdown and agents, never for browsers or assets", () => {
-    expect(needsPolicy(get("/llms.txt"), "/llms.txt", null)).toBe(true);
-    expect(needsPolicy(get("/pricing.md"), "/pricing.md", null)).toBe(true);
-    expect(needsPolicy(get("/", { accept: "text/markdown" }), "/", null)).toBe(true);
-    expect(needsPolicy(get("/", { "user-agent": GPTBOT_UA }), "/", policy())).toBe(true);
-    expect(needsPolicy(get("/", browserHeaders), "/", policy())).toBe(false);
-    expect(needsPolicy(get("/app.js", { "user-agent": GPTBOT_UA }), "/app.js", policy())).toBe(false);
-    expect(needsPolicy(get("/llms.txt", { "x-dedica-origin-fetch": "1" }), "/llms.txt", policy())).toBe(false);
   });
 });

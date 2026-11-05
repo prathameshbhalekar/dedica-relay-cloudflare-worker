@@ -8,8 +8,7 @@
  * - Known AI agents, signed agents and automated-looking clients may get Dedica's agent version.
  */
 
-import { ORIGIN_FETCH_HEADER } from "./env";
-import type { Detection, Policy, Twins } from "./types";
+import type { Detection, Twins } from "./types";
 
 interface Needle {
   n: string;
@@ -137,21 +136,6 @@ export function twinEligible(pathname: string, twins: Twins): boolean {
   return include.length === 0 || include.some(matches);
 }
 
-/** Paths Dedica may manage: on a cold isolate these wait for the policy instead of passing through. */
-export function mightBeArtifact(pathname: string): boolean {
-  return (
-    pathname === "/robots.txt" ||
-    pathname === "/llms.txt" ||
-    pathname === "/llms-full.txt" ||
-    pathname === "/agents.md" ||
-    pathname === "/openapi.json" ||
-    pathname === "/mcp/server-card" ||
-    pathname.endsWith("/llms.txt") ||
-    pathname.startsWith("/.well-known/") ||
-    pathname.endsWith(".md")
-  );
-}
-
 const ASSET_RE = /\.(?:js|mjs|css|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|eot|map|webp|avif|mp4|webm|mp3|wav|pdf)$/i;
 
 /** Headers that mark an API call, a session, a partial download or a protocol switch: never a page read. */
@@ -175,14 +159,3 @@ export function negotiable(request: Request, pathname: string): boolean {
   return true;
 }
 
-/** Only traffic Dedica may answer waits for a missing policy; everything else passes straight through. */
-export function needsPolicy(request: Request, pathname: string, policy: Policy | null): boolean {
-  if (request.headers.get(ORIGIN_FETCH_HEADER) === "1") return false;
-  if (mightBeArtifact(pathname)) return true;
-  if (!negotiable(request, pathname)) return false;
-  if (isBrowserNavigation(request.headers)) return false;
-  if ((request.headers.get("accept") ?? "").includes("text/markdown")) return true;
-  if (policy) return detectAgent(request.headers, policy.detection);
-  const ua = userAgent(request.headers);
-  return /bot|crawler|chatgpt|claude|perplexity/i.test(ua) || request.headers.has("signature-agent");
-}

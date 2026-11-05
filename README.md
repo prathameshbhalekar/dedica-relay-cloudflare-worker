@@ -22,6 +22,10 @@ has a timeout; anything unexpected (Dedica slow, down, no content for a path) fa
   your origin's answer directly.
 - The agent version of a normal page URL waits at most 1.5 s for Dedica. When a call to Dedica fails, every
   other request still waiting on it is released to your origin at once, and Dedica is left alone for 15 s.
+- When the worker has just started, every request waits for the policy (one fetch shared by all, at most 4 s), so a
+  new isolate answers the same as a warm one. If the policy doesn't come, your origin answers and Dedica is left
+  alone for 15 s, during which nothing waits; while Dedica stays down, one such wait can recur every 15 s. Once a
+  policy is loaded it is refreshed in the background and nothing waits.
 - Dedica can hand any request back to your origin (`x-dedica-content-fallback: origin`).
 - A malformed policy only ever serves less: empty or invalid entries are dropped, the cache TTL is kept to
   5–300 s, and a policy without a usable mode or detection settings serves nothing.
