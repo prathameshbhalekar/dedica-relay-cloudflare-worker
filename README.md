@@ -8,10 +8,10 @@ What it does:
 - serves `/.well-known/dedica.json` and sends a heartbeat every 5 minutes (cron);
 - fetches your site's policy from Dedica (cached ~30 s) and recognises AI agents;
 - in `autopilot` mode, serves agent versions of your pages (`/pricing.md`, or the page itself for a
-  detected agent or `?mode=agent`) and Dedica-managed files (`/llms.txt`, ...) from Dedica, serves
-  discovery files (`/openapi.json`, `/.well-known/ard.json`, ...) only where your origin has none, gives
-  agents a markdown body on your 404s, and proxies `/ask` (GET, and NLWeb POST) and `/mcp` once Dedica
-  enables them. In `report` mode it passes everything through;
+  detected agent or `Accept: text/markdown`) and Dedica-managed files (`/llms.txt`, ...) from Dedica, serves
+  discovery files (`/openapi.json`, `/.well-known/ard.json`, ...) only where your origin has none, and
+  proxies `/ask` (GET, and NLWeb POST) and `/mcp` once Dedica enables them. Your origin's own responses
+  (404s included) are always passed through untouched. In `report` mode it passes everything through;
 - reports page loads (people, agents and bots) to Dedica in batches (protocol section 7, see below).
 
 **Fail-safe:** people, browsers and search engines always get your normal page; every call to Dedica
@@ -31,8 +31,8 @@ What's in an event: time, method, host, path, status, latency, what the worker d
 it, the recognised agent, the user agent, the referer's origin and path, the country, a few request headers
 (`accept`, `accept-language`, `sec-fetch-*`) and only the attribution query parameters (`utm_*`, `ref`, `source`) plus
 the questions your policy declares. **Never** an IP address, cookies, the full query string or the token: a visitor is
-a daily pseudonym (SHA-256 of IP, user agent, day and a secret salt). Set your own salt with
-`npx wrangler secret put DEDICA_SALT`; without it the middleware token is used, which Dedica only stores hashed.
+a daily pseudonym (SHA-256 of IP, user agent, day and a secret salt). Set the salt (any long random string) with
+`npx wrangler secret put DEDICA_SALT`; without it no visitor pseudonym is sent at all.
 
 ## Install
 

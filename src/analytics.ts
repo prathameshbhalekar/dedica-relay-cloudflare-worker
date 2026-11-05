@@ -7,7 +7,7 @@
  * - Events are batched per isolate and sent as NDJSON: at 1000 events, or 5 seconds after the first one. A batch
  *   Dedica can't take right now (429/503, network error) is kept and retried with the next one, up to 5000 events.
  * - No IP address leaves the edge: a visitor is a daily pseudonym, SHA-256 of IP, user agent, day and a secret salt
- *   (`DEDICA_SALT`, else the middleware token, which Dedica only stores as a hash). Only the attribution query
+ *   (`DEDICA_SALT`; without it no pseudonym is sent). Only the attribution query
  *   parameters (`utm_*`, `ref`, `source`) and the policy's question parameters are kept; the referer is its origin
  *   and path only. Cookies and the token are never sent.
  */
@@ -26,7 +26,6 @@ export type Outcome =
   | "twin" // an explicit markdown URL (`/pricing.md`)
   | "negotiated" // the agent version of a normal page URL
   | "human_page" // a search engine, preview or unknown crawler kept the normal page
-  | "agent_404" // the origin's 404/410 with a markdown body for an agent
   | "origin"; // passed through to the origin
 
 /** How the worker answered a request, turned into an event. */
@@ -122,9 +121,10 @@ function refererOf(headers: Headers): string | undefined {
   }
 }
 
-/** A daily pseudonym for the visitor. The IP itself never leaves the edge. */
+/** A daily pseudonym for the visitor. The IP itself never leaves the edge. No `DEDICA_SALT`, no pseudonym: the
+ *  token is never a fallback, since Dedica sees it on every call and could reverse the hash. */
 async function visitorHash(headers: Headers, env: Env, now: number): Promise<string | undefined> {
-  const salt = env.DEDICA_SALT || env.DEDICA_MIDDLEWARE_TOKEN;
+  const salt = env.DEDICA_SALT;
   const ip = headers.get("cf-connecting-ip");
   if (!salt || !ip) return undefined;
   const day = new Date(now).toISOString().slice(0, 10);

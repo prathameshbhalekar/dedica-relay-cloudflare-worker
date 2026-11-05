@@ -17,6 +17,7 @@ DEDICA_API_URL = "https://api.getdedica.com"
 # DEDICA_QUERY_ORIGIN = ""
 
 # Secret, never in this file:  npx wrangler secret put DEDICA_MIDDLEWARE_TOKEN
-# Optional secret: salt for the daily visitor pseudonym in traffic reports (defaults to the token).
+# Optional secret: salt for the daily visitor pseudonym in traffic reports (without it, no pseudonym is sent).
+# Use any long random string, e.g. `openssl rand -hex 32`.
 #   npx wrangler secret put DEDICA_SALT
 # Local development: put DEDICA_MIDDLEWARE_TOKEN=... in .dev.vars (gitignored).

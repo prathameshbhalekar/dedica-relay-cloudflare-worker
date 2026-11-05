@@ -4,7 +4,6 @@ import {
   HEARTBEAT_TIMEOUT_MS,
   MIDDLEWARE,
   ORIGIN_FETCH_HEADER,
-  SERVED_HEADER,
   STATUS_PATH,
   VERSION,
   WELL_KNOWN_PATH,
@@ -20,7 +19,6 @@ import { Server } from "./serve";
 import type { Artifact, Ctx, Env, Policy } from "./types";
 
 const TEXT = "text/plain; charset=utf-8";
-const MARKDOWN = "text/markdown; charset=utf-8";
 
 export interface EdgeOptions {
   /** Calls to Dedica (and nothing else). */
@@ -40,8 +38,6 @@ interface Visit {
   ua: string;
   /** `Accept: text/markdown`. */
   acceptsMarkdown: boolean;
-  /** `?mode=agent`: an explicit ask for the agent version of any page, even from a browser. */
-  agentMode: boolean;
 }
 
 /** How a request was answered. `response` is null only for `human_page`: the origin still has to answer. */
@@ -99,14 +95,13 @@ export class Edge {
       url,
       ua: userAgent(request.headers),
       acceptsMarkdown: (request.headers.get("accept") ?? "").includes("text/markdown"),
-      agentMode: url.searchParams.get("mode") === "agent",
     };
     const answer = await this.answer(visit, env, ctx);
     this.report(visit, answer, env, ctx, startedAt);
     return answer.response;
   }
 
-  /** Dedica's answer, else the origin's (with a markdown 404 for an agent). */
+  /** Dedica's answer, else the origin's, returned untouched. */
   private async answer(visit: Visit, env: Env, ctx: Ctx): Promise<Served & { response: Response }> {
     const fromDedica = await this.serve(visit, env, ctx).catch((error: unknown) => {
       console.warn(`[dedica] serving failed; using origin: ${error}`);
@@ -115,13 +110,6 @@ export class Edge {
     if (fromDedica?.response) return { ...fromDedica, response: fromDedica.response };
 
     const response = await this.originFetch(visit.request);
-    let notFound: Response | null = null;
-    try {
-      notFound = this.agentNotFound(visit, response);
-    } catch {
-      // Keep the origin's answer.
-    }
-    if (notFound) return { response: notFound, outcome: "agent_404", category: null };
     return { response, outcome: fromDedica?.outcome === "human_page" ? "human_page" : "origin", category: null };
   }
 
@@ -137,30 +125,6 @@ export class Edge {
     } catch (error) {
       console.warn(`[dedica] event report skipped: ${error}`);
     }
-  }
-
-  /** The origin's 404/410, with a markdown body for an agent so it knows where to go next (status kept). */
-  private agentNotFound({ request, url, ua, acceptsMarkdown }: Visit, response: Response): Response | null {
-    if (response.status !== 404 && response.status !== 410) return null;
-    if (request.method !== "GET" && request.method !== "HEAD") return null;
-    const p = this.policies.policy;
-    if (!p || p.mode !== "autopilot") return null;
-    if (isTraditionalBot(ua, p.detection) || !(acceptsMarkdown || detectAgent(request.headers, p.detection))) return null;
-    if ((response.headers.get("content-type") ?? "").includes("text/markdown")) return null;
-
-    const lines = [
-      "# Not found",
-      "",
-      `There is no page at \`${url.pathname}\` on ${url.host} (HTTP ${response.status}).`,
-      "",
-      ...(p.artifacts.some((a) => a.path === "/llms.txt") ? [`- An index of this site's pages for agents: ${url.origin}/llms.txt`] : []),
-      `- The home page: ${url.origin}/`,
-    ];
-    void response.body?.cancel().catch(() => {});
-    return new Response(request.method === "HEAD" ? null : `${lines.join("\n")}\n`, {
-      status: response.status,
-      headers: { "content-type": MARKDOWN, "cache-control": "private, no-store", vary: "accept, user-agent", [SERVED_HEADER]: "1" },
-    });
   }
 
   /** What Dedica answers for this request, in order, or null and the origin answers. */
@@ -183,8 +147,8 @@ export class Edge {
     const asksQuestion =
       questionParams.some((key) => Boolean(url.searchParams.get(key)?.trim())) || (questionParams.length > 0 && /~~.+/.test(url.pathname));
 
-    // 3. Search engines, link previews and (unknown) crawlers keep the person's page, unless they ask for agent mode.
-    if (keepHumanPage(ua, p.detection, asksQuestion || visit.agentMode)) return { response: null, outcome: "human_page", category: null };
+    // 3. Search engines, link previews and (unknown) crawlers keep the person's page, unless they ask a question.
+    if (keepHumanPage(ua, p.detection, asksQuestion)) return { response: null, outcome: "human_page", category: null };
 
     // 4. An explicit markdown request (`/pricing.md`), for anyone who asks. A declared question makes the answer
     //    personal, so it is never shared-cached.
@@ -196,9 +160,9 @@ export class Edge {
       return served("twin", "public", await this.server.fromDedica(p, env, input, TEXT, shared, request));
     }
 
-    // 5. The agent version of a page, for a detected agent, a client asking for `text/markdown`, or `?mode=agent`.
+    // 5. The agent version of a page, for a detected agent or a client asking for `text/markdown`.
     //    Never for a search engine. If Dedica has none for the page, the origin answers.
-    const wantsAgentVersion = visit.acceptsMarkdown || visit.agentMode || detectAgent(request.headers, p.detection);
+    const wantsAgentVersion = visit.acceptsMarkdown || detectAgent(request.headers, p.detection);
     if (p.twins.negotiate && !isTraditionalBot(ua, p.detection) && twinEligible(url.pathname, p.twins) && wantsAgentVersion) {
       const input = { path: url.pathname, search: url.search, category: "eligible" } as const;
       return served("negotiated", "eligible", await this.server.fromDedica(p, env, input, TEXT, false, request));

@@ -9,6 +9,7 @@ export const env: Env = {
   DEDICA_SITE_ID: fixture.siteId,
   DEDICA_API_URL: API,
   DEDICA_MIDDLEWARE_TOKEN: "dm_test",
+  DEDICA_SALT: "salt_test",
 };
 
 export const BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";

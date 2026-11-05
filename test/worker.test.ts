@@ -201,35 +201,29 @@ describe("discovery files and agent extras", () => {
     expect(await res.text()).toBe("missing");
   });
 
-  it("serves the agent version of a page to anyone asking for ?mode=agent, but not to search engines", async () => {
+  it("leaves a site's own ?mode=agent parameter alone: a browser gets the normal page", async () => {
     const { edge, calls } = harness({ serve: () => markdown() });
-    const res = await edge.fetch(get("/?mode=agent", browserHeaders), env, new FakeCtx());
-    expect(await res.text()).toBe("# Pricing\n");
-    expect(res.headers.get("cache-control")).toBe("private, no-store");
-    const call = serveCalls(calls)[0];
-    expect(header(call, "x-dedica-category")).toBe("eligible");
-    expect(new URL(call.url).search).toBe("?mode=agent");
-    expect(await (await edge.fetch(get("/?mode=agent", { "user-agent": GOOGLEBOT_UA }), env, new FakeCtx())).text()).toBe("origin page");
+    const ctx = new FakeCtx();
+    await edge.policies.refresh(env);
+    const res = await edge.fetch(get("/quote?mode=agent", browserHeaders), env, ctx);
+    expect(await res.text()).toBe("origin page");
+    expect(serveCalls(calls)).toHaveLength(0);
   });
 
-  it("gives agents a markdown 404 and keeps the status", async () => {
-    const p = policy({ artifacts: [{ path: "/llms.txt", contentType: "text/plain", action: "proxy" }] });
-    const { edge } = harness({ policy: p, origin: () => new Response("<h1>Nope</h1>", { status: 404, headers: { "content-type": "text/html" } }) });
+  it("passes the origin's 404 through untouched, even to an agent", async () => {
+    const origin = () =>
+      new Response('{"error":"not found"}', { status: 404, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
+    const { edge } = harness({ origin });
     const ctx = new FakeCtx();
-    // Warm the policy (the 404 rewrite never waits for one).
-    await edge.fetch(get("/llms.txt", browserHeaders), env, ctx);
-
-    const res = await edge.fetch(get("/no-such-page", { "user-agent": "curl/8.0", accept: "text/markdown" }), env, ctx);
-    expect(res.status).toBe(404);
-    expect(res.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
-    const body = await res.text();
-    expect(body).toContain("There is no page at `/no-such-page`");
-    expect(body).toContain("https://shop.example/llms.txt");
-
-    const person = await edge.fetch(get("/no-such-page", browserHeaders), env, ctx);
-    expect(await person.text()).toBe("<h1>Nope</h1>");
-    const google = await edge.fetch(get("/no-such-page", { "user-agent": GOOGLEBOT_UA }), env, ctx);
-    expect(await google.text()).toBe("<h1>Nope</h1>");
+    await edge.policies.refresh(env);
+    const clients: Record<string, string>[] = [{ "user-agent": "okhttp/4.12.0" }, { "user-agent": GPTBOT_UA }, { "user-agent": "curl/8.0", accept: "text/markdown" }];
+    for (const headers of clients) {
+      const res = await edge.fetch(get("/api/users/123", headers), env, ctx);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toBe("application/json");
+      expect(res.headers.get("access-control-allow-origin")).toBe("*");
+      expect(await res.text()).toBe('{"error":"not found"}');
+    }
   });
 });
 
@@ -430,6 +424,18 @@ describe("traffic reporting", () => {
     expect(eventBodies(h.events)[0].visitor).not.toBe(same.events[0].visitor);
   });
 
+  it("sends no pseudonym without DEDICA_SALT, never falling back to the token", async () => {
+    const h = harness();
+    const unsalted = { ...env, DEDICA_SALT: undefined };
+    await h.edge.policies.refresh(unsalted);
+    const ctx = new FakeCtx();
+    await h.edge.fetch(get("/a", visitor()), unsalted, ctx);
+    await ctx.drain();
+    const events = eventBodies(h.events);
+    expect(events).toHaveLength(1);
+    expect(events[0].visitor).toBeUndefined();
+  });
+
   it("skips static files, a page's sub-requests and prefetches", async () => {
     const { events } = await reported([
       get("/app.js", { "user-agent": GPTBOT_UA }),
@@ -440,7 +446,7 @@ describe("traffic reporting", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("reports the agent version, a search engine's normal page, a managed file, /mcp and the agent 404", async () => {
+  it("reports the agent version, a search engine's normal page, a managed file, /mcp and the origin's 404", async () => {
     expect((await reported(get("/pricing", { "user-agent": GPTBOT_UA }))).events[0]).toMatchObject({ outcome: "negotiated", category: "eligible" });
     expect((await reported(get("/pricing.md", { "user-agent": GOOGLEBOT_UA }))).events[0]).toMatchObject({
       outcome: "human_page",
@@ -459,7 +465,7 @@ describe("traffic reporting", () => {
       serve: () => new Response("nf", { status: 404 }),
       origin: () => new Response("missing", { status: 404 }),
     });
-    expect(missing.events[0]).toMatchObject({ outcome: "agent_404", status: 404 });
+    expect(missing.events[0]).toMatchObject({ outcome: "origin", status: 404, served_by_dedica: false });
   });
 
   it("sends the events of a few seconds in one batch", async () => {
