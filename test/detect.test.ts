@@ -68,6 +68,13 @@ describe("keepHumanPage", () => {
     expect(keepHumanPage("somecrawler/1.0", d, false)).toBe(true);
     expect(keepHumanPage("somecrawler/1.0", d, true)).toBe(false);
   });
+
+  it("serves Dedica's live check the agent version at .md URLs, but never at normal page URLs", () => {
+    const dedicabot = "dedicabot/0.1 (+https://getdedica.com/bot)";
+    expect(keepHumanPage(dedicabot, d, false)).toBe(false);
+    expect(isTraditionalBot(dedicabot, d)).toBe(true);
+    expect(detectAgent(h({ "user-agent": dedicabot }), d)).toBe(false);
+  });
 });
 
 describe("twinEligible", () => {

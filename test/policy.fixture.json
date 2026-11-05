@@ -15,6 +15,7 @@
       "bingpreview",
       "chrome-lighthouse",
       "datadogsynthetics",
+      "dedicabot",
       "discordbot",
       "duckduckbot",
       "embedly",
@@ -277,6 +278,10 @@
           "agent"
         ],
         [
+          "dedicabot",
+          "agent"
+        ],
+        [
           "googlebot",
           "human"
         ],
@@ -367,8 +372,8 @@
   "artifacts": [],
   "serve": {
     "baseUrl": "https://api.dedica.test/api/v1/middleware/serve/",
-    "version": "0ba28f80538c92d1"
+    "version": "170e07be2d98dd22"
   },
   "proxies": [],
-  "version": "0ba28f80538c92d1"
+  "version": "170e07be2d98dd22"
 }
