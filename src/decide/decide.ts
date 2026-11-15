@@ -14,7 +14,7 @@ import { eligible, markdownPage } from "../util/paths";
 import { accessBlock, routeForRequest } from "./access";
 import { type Decision, ORIGIN, ORIGIN_UNREPORTED } from "./decision";
 
-export async function decide(ctx: RequestContext): Promise<Decision> {
+export async function   decide(ctx: RequestContext): Promise<Decision> {
   const { facts, policy: p, env } = ctx;
   const { request, url } = facts;
 

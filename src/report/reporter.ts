@@ -52,11 +52,11 @@ export class Reporter {
     this.buffer = this.buffer.slice(MAX_BATCH);
     try {
       const response = await this.client.events(env, batch.map((event) => JSON.stringify(event)).join("\n"));
+      // 202: queued (Dedica checks each event later, so one bad line never fails the rest).
       if (response.status !== 202) {
         console.warn(`[dedica] event batch ${response.status}: ${(await response.text().catch(() => "")).slice(0, 300)}`);
       } else {
-        const body = (await response.json().catch(() => null)) as { accepted?: number; rejected?: number; errors?: unknown } | null;
-        if (body?.rejected) console.warn(`[dedica] events: ${body.accepted} accepted, ${body.rejected} rejected`, body.errors);
+        void response.body?.cancel().catch(() => {});
       }
       if (response.status === 429 || response.status === 503) this.requeue(batch);
     } catch (err) {
