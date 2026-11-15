@@ -3,9 +3,9 @@ import { routeFor } from "../src/decide/access";
 import { parseCidr, parseIp } from "../src/identity/ip";
 import { parseSignatureInput, verifiedSigner } from "../src/identity/signature";
 import { claimedAgent, identify, ipTier } from "../src/identity/verdict";
-import { sanitizePolicy } from "../src/policy/sanitize";
-import type { Access, Policy, Verification } from "../src/policy/types";
-import { API, BROWSER_UA, FakeCtx, GOOGLEBOT_UA, GPTBOT_UA, SITE, browserHeaders, env, eventBodies, get, harness, policy } from "./helpers";
+import { type Signer, compile } from "../src/policy/compile";
+import type { AccessDoc, PolicyDoc, VerificationDoc } from "../src/policy/schema";
+import { API, BROWSER_UA, FakeCtx, GOOGLEBOT_UA, GPTBOT_UA, SITE, access, browserHeaders, content, env, eventBodies, get, harness, policy } from "./helpers";
 
 const NOW = Date.parse("2026-11-15T12:00:00Z");
 const FRESH = "2026-11-15T06:00:00Z";
@@ -14,46 +14,28 @@ const OPENAI_IP = "20.171.207.5";
 const GOOGLE_IP = "66.249.66.1";
 const ELSEWHERE_IP = "198.51.100.9";
 
-function verification(overrides: Partial<Verification> = {}): Verification {
+/** Identity data: gptbot and googlebot publish ranges (the catalog names their sets); claudebot doesn't. */
+function verification(overrides: Partial<VerificationDoc> = {}): VerificationDoc {
   return {
     maxAgeSeconds: 7 * 24 * 3600,
-    claims: [
-      ["chatgpt-user", "chatgpt-user"],
-      ["googlebot", "googlebot"],
-      ["claudebot", "claudebot"],
-      ["gptbot", "gptbot"],
-    ],
-    claimsExact: [],
-    agentIpSets: { gptbot: ["openai-gptbot"], googlebot: ["google-common"] },
     ipSets: {
       "openai-gptbot": { cidrs: ["20.171.207.0/24"], fetchedAt: FRESH },
       "google-common": { cidrs: ["66.249.64.0/19", "2001:4860:4801:10::/64"], fetchedAt: FRESH },
     },
-    signatureAgents: [],
+    signers: [],
     ...overrides,
   };
 }
 
-function access(overrides: Partial<Access> = {}): Access {
-  return {
-    enforce: true,
-    impersonators: "flag",
-    blockedAgentUa: [],
-    blockedAgentUaExact: [],
-    blockedServeHumanUa: [],
-    blockedServeHumanUaExact: [],
-    blockedAgentKeys: [],
-    routes: [],
-    verification: verification(),
-    ...overrides,
-  };
+/** A policy with these Agent Access rules (null: none enforced) and identity data. */
+function withAccess(a: AccessDoc | null, overrides: Partial<PolicyDoc> = {}): PolicyDoc {
+  return policy({ access: a, verification: verification(), ...overrides });
 }
 
-function withAccess(a: Access | null, overrides: Partial<Policy> = {}): Policy {
-  return policy({ access: a, ...overrides });
-}
+const compiled = (v: VerificationDoc = verification()) => compile(withAccess(null, { verification: v }));
+const agent = (key: string) => compiled().detect.contains.find(([, a]) => a.key === key)![1];
 
-async function run(request: Request, p: Policy, options: Parameters<typeof harness>[0] = {}) {
+async function run(request: Request, p: PolicyDoc, options: Parameters<typeof harness>[0] = {}) {
   const h = harness({ policy: p, now: () => NOW, ...options });
   await h.worker.policies.refresh(env);
   const ctx = new FakeCtx();
@@ -77,23 +59,27 @@ describe("IP ranges", () => {
   });
 
   it("verifies a bot from its ranges, flags one from elsewhere, and only claims without fresh data", () => {
-    const v = verification();
-    expect(ipTier(v, "gptbot", OPENAI_IP, NOW)).toBe("verified");
-    expect(ipTier(v, "googlebot", "2001:4860:4801:10::5", NOW)).toBe("verified");
-    expect(ipTier(v, "gptbot", ELSEWHERE_IP, NOW)).toBe("impersonator");
-    expect(ipTier(v, "claudebot", ELSEWHERE_IP, NOW)).toBe("claimed"); // no published ranges
-    expect(ipTier(v, "gptbot", null, NOW)).toBe("claimed");
-    const stale = verification({ ipSets: { "openai-gptbot": { cidrs: ["20.171.207.0/24"], fetchedAt: STALE } } });
-    expect(ipTier(stale, "gptbot", ELSEWHERE_IP, NOW)).toBe("claimed");
+    const v = compiled().verification!;
+    expect(ipTier(v, agent("gptbot"), OPENAI_IP, NOW)).toBe("verified");
+    expect(ipTier(v, agent("googlebot"), "2001:4860:4801:10::5", NOW)).toBe("verified");
+    expect(ipTier(v, agent("gptbot"), ELSEWHERE_IP, NOW)).toBe("impersonator");
+    expect(ipTier(v, agent("claudebot"), ELSEWHERE_IP, NOW)).toBe("claimed"); // no published ranges
+    expect(ipTier(v, agent("gptbot"), null, NOW)).toBe("claimed");
+    const stale = compiled(verification({ ipSets: { "openai-gptbot": { cidrs: ["20.171.207.0/24"], fetchedAt: STALE } } })).verification!;
+    expect(ipTier(stale, agent("gptbot"), ELSEWHERE_IP, NOW)).toBe("claimed");
   });
 
-  it("names the bot by the longest needle first", () => {
-    expect(claimedAgent(verification(), "mozilla/5.0 (compatible; chatgpt-user/1.0)")).toBe("chatgpt-user");
-    expect(claimedAgent(verification(), BROWSER_UA.toLowerCase())).toBeNull();
+  it("names the bot by the longest needle first, tools included", () => {
+    expect(claimedAgent(compiled(), "mozilla/5.0 (compatible; chatgpt-user/1.0)")?.key).toBe("chatgpt-user");
+    expect(claimedAgent(compiled(), "curl/8.4.0")?.key).toBe("curl");
+    expect(claimedAgent(compiled(), BROWSER_UA.toLowerCase())).toBeNull();
   });
 });
 
 describe("Web Bot Auth", () => {
+  /** The signing agents of `v`, all trusted (identify() also checks they are fresh). */
+  const trusting = (v: VerificationDoc) => (host: string): Signer | null => compiled(v).verification!.signers.get(host) ?? null;
+
   async function signer() {
     const pair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as CryptoKeyPair;
     const raw = new Uint8Array((await crypto.subtle.exportKey("raw", pair.publicKey)) as ArrayBuffer);
@@ -103,7 +89,7 @@ describe("Web Bot Auth", () => {
 
   async function signed(
     options: { components?: string; created?: number; expires?: number; tamper?: boolean; keyid?: string } = {},
-  ): Promise<{ request: Request; v: Verification }> {
+  ): Promise<{ request: Request; v: VerificationDoc }> {
     const { pair, x } = await signer();
     const created = options.created ?? Math.floor(NOW / 1000) - 5;
     const expires = options.expires ?? created + 300;
@@ -124,9 +110,7 @@ describe("Web Bot Auth", () => {
         signature: `sig1=:${btoa(String.fromCharCode(...sig))}:`,
       },
     });
-    const v = verification({
-      signatureAgents: [{ signatureAgent: "chatgpt.com", agents: ["chatgpt-user", "chatgpt-agent"], fetchedAt: FRESH, keys: [{ kid: options.keyid ?? "k1", x }] }],
-    });
+    const v = verification({ signers: [{ host: "chatgpt.com", fetchedAt: FRESH, keys: [{ kid: options.keyid ?? "k1", x }] }] });
     return { request, v };
   }
 
@@ -142,8 +126,8 @@ describe("Web Bot Auth", () => {
 
   it("verifies a valid signature from a known signing agent", async () => {
     const { request, v } = await signed();
-    expect((await verifiedSigner(v, request, NOW))?.signatureAgent).toBe("chatgpt.com");
-    expect(await identify(v, request, BROWSER_UA.toLowerCase(), false, NOW)).toEqual({ tier: "verified", agent: "chatgpt-user", signed: true });
+    expect((await verifiedSigner(trusting(v), request, NOW))?.host).toBe("chatgpt.com");
+    expect(await identify(compiled(v), request, BROWSER_UA.toLowerCase(), false, NOW)).toEqual({ tier: "verified", agent: "chatgpt-user", signed: true });
   });
 
   it("rejects a signature that doesn't cover Signature-Agent or this site, an unknown key, an expired one, or another signer", async () => {
@@ -155,7 +139,7 @@ describe("Web Bot Auth", () => {
       { tamper: true },
     ]) {
       const { request, v } = await signed(options);
-      expect(await verifiedSigner(v, request, NOW), JSON.stringify(options)).toBeNull();
+      expect(await verifiedSigner(trusting(v), request, NOW), JSON.stringify(options)).toBeNull();
     }
   });
 
@@ -166,14 +150,14 @@ describe("Web Bot Auth", () => {
       const stripped = params === "" ? raw.replace(/;tag="web-bot-auth"/, "") : raw.replace(/;created=\d+;expires=\d+/, "");
       const headers = new Headers(request.headers);
       headers.set("signature-input", stripped);
-      expect(await verifiedSigner(v, new Request(request.url, { headers }), NOW)).toBeNull();
+      expect(await verifiedSigner(trusting(v), new Request(request.url, { headers }), NOW)).toBeNull();
     }
   });
 });
 
 describe("Agent Access enforcement", () => {
   it("blocks a blocked AI crawler with a 403 and reports the rule", async () => {
-    const p = withAccess(access({ blockedAgentUa: ["gptbot"] }));
+    const p = withAccess(access({ blocked: ["gptbot"] }));
     const { res, events, originCalls } = await run(get("/pricing", { "user-agent": GPTBOT_UA, "cf-connecting-ip": OPENAI_IP }), p);
     expect(res.status).toBe(403);
     expect(await res.text()).toBe("Not available to this client.");
@@ -182,8 +166,8 @@ describe("Agent Access enforcement", () => {
     expect(JSON.stringify(events[0])).not.toContain(OPENAI_IP);
   });
 
-  it("never blocks a search engine or a browser navigation through the agent list", async () => {
-    const p = withAccess(access({ blockedAgentUa: ["googlebot", "gptbot"] }));
+  it("never blocks a search engine or a browser navigation as an agent", async () => {
+    const p = withAccess(access({ blocked: ["gptbot"] }));
     for (const request of [get("/pricing", { "user-agent": GOOGLEBOT_UA }), get("/pricing", { ...browserHeaders, "user-agent": GPTBOT_UA })]) {
       const { res } = await run(request, p);
       expect(res.status).not.toBe(403);
@@ -193,13 +177,13 @@ describe("Agent Access enforcement", () => {
   it("has no exemption list: naming Dedica's gateway in the user agent doesn't help a blocked bot", async () => {
     // User-agent rules only bind bots that name themselves; a longer search-engine or monitor name in the user agent
     // still makes a client a search engine (as on Ora). What catches a bot faking a name is impersonator blocking.
-    const p = withAccess(access({ blockedAgentUa: ["gptbot"] }));
+    const p = withAccess(access({ blocked: ["gptbot"] }));
     expect((await run(get("/pricing", { "user-agent": `${GPTBOT_UA} DedicaAgentGateway/0.1` }), p)).res.status).toBe(403);
     expect((await run(get("/pricing", { "user-agent": "DedicaBot/0.1 (+https://getdedica.com/bot)" }), p)).res.status).not.toBe(403);
   });
 
   it("blocks a search engine only by name", async () => {
-    const { res, events } = await run(get("/", { "user-agent": GOOGLEBOT_UA }), withAccess(access({ blockedServeHumanUa: ["googlebot"] })));
+    const { res, events } = await run(get("/", { "user-agent": GOOGLEBOT_UA }), withAccess(access({ blocked: ["googlebot"] })));
     expect(res.status).toBe(403);
     expect(events[0]).toMatchObject({ block_rule: "serve_human" });
   });
@@ -225,15 +209,16 @@ describe("Agent Access enforcement", () => {
   });
 
   it("blocks nothing when rules aren't enforced or the site is in report mode, but still reports the verdict", async () => {
-    const off = await run(get("/pricing", { "user-agent": GPTBOT_UA, "cf-connecting-ip": OPENAI_IP }), withAccess(access({ enforce: false, blockedAgentUa: ["gptbot"] })));
+    const off = await run(get("/pricing", { "user-agent": GPTBOT_UA, "cf-connecting-ip": OPENAI_IP }), withAccess(null));
     expect(off.res.status).toBe(200);
     expect(off.events[0]).toMatchObject({ client: { verification: "verified" } });
-    const report = await run(get("/pricing", { "user-agent": GPTBOT_UA }), withAccess(access({ blockedAgentUa: ["gptbot"] }), { mode: "report" }));
+    // Report mode never blocks, even if a policy carried rules.
+    const report = await run(get("/pricing", { "user-agent": GPTBOT_UA }), withAccess(access({ blocked: ["gptbot"] }), { mode: "report", content: null }));
     expect(report.res.status).toBe(200);
   });
 
   it("still blocks a bot that sends Dedica's crawler header, and lets the crawler through to the origin, unreported", async () => {
-    const p = withAccess(access({ blockedAgentUa: ["gptbot"] }));
+    const p = withAccess(access({ blocked: ["gptbot"] }));
     const forged = await run(get("/pricing", { "user-agent": GPTBOT_UA, "x-dedica-origin-fetch": "1" }), p);
     expect(forged.res.status).toBe(403);
     expect(forged.events[0]).toMatchObject({ outcome: "blocked", block_rule: "crawler" });
@@ -244,27 +229,26 @@ describe("Agent Access enforcement", () => {
     expect(crawler.events).toHaveLength(0);
   });
 
-  it("adds no verdict to events without verification data, and old policies parse without access", async () => {
-    const { events } = await run(get("/pricing", { "user-agent": GPTBOT_UA }), withAccess(null));
+  it("adds no verdict to events without verification data", async () => {
+    const { events } = await run(get("/pricing", { "user-agent": GPTBOT_UA }), policy());
     expect((events[0].client as Record<string, unknown>).verification).toBeUndefined();
-    const { access: _ignored, ...old } = policy();
-    expect(sanitizePolicy(old)?.access).toBeNull();
   });
 
-  it("drops verification without a usable age limit, and coerces unknown values to block nothing", () => {
-    const parsed = sanitizePolicy({ ...policy(), access: { enforce: "yes", impersonators: "maybe", blockedAgentUa: ["", 1, "gptbot"], verification: { maxAgeSeconds: 0 } } });
-    expect(parsed?.access).toMatchObject({ enforce: false, impersonators: "flag", blockedAgentUa: ["gptbot"], verification: null });
+  it("blocks a tool by name, but never takes it for an agent", async () => {
+    const curl = await run(get("/pricing", { "user-agent": "curl/8.4.0" }), withAccess(access({ blocked: ["curl"] })));
+    expect(curl.res.status).toBe(403);
+    expect(curl.events[0]).toMatchObject({ block_rule: "crawler", client: { kind: "unknown", verification: "claimed", agent: "curl" } });
   });
 });
 
 describe("robots.txt", () => {
   // Dedica serves the whole file (the site's own rules plus the groups for blocked bots) as a `proxy` artifact.
-  const robotsPolicy = (a: Access = access()) =>
-    withAccess(a, { artifacts: [{ path: "/robots.txt", action: "proxy", contentType: "text/plain; charset=utf-8", version: "v1" }] });
+  const robotsPolicy = (a: AccessDoc = access()) =>
+    withAccess(a, { content: content({ files: [{ path: "/robots.txt", action: "proxy", contentType: "text/plain; charset=utf-8", version: "v1" }] }) });
   const ours = () => new Response("User-agent: *\nDisallow: /admin\n\nUser-agent: GPTBot\nDisallow: /\n", { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
 
   it("serves Dedica's file, even to a bot it blocks", async () => {
-    const { res } = await run(get("/robots.txt", { "user-agent": GPTBOT_UA }), robotsPolicy(access({ blockedAgentUa: ["gptbot"] })), { serve: ours });
+    const { res } = await run(get("/robots.txt", { "user-agent": GPTBOT_UA }), robotsPolicy(access({ blocked: ["gptbot"] })), { serve: ours });
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("User-agent: GPTBot\nDisallow: /");
   });
@@ -272,11 +256,6 @@ describe("robots.txt", () => {
   it("serves the origin's own file when Dedica has none (a 404 from Dedica)", async () => {
     const { res } = await run(get("/robots.txt"), robotsPolicy(), { origin: () => new Response("User-agent: *\nAllow: /\n", { headers: { "content-type": "text/plain" } }) });
     expect(await res.text()).toBe("User-agent: *\nAllow: /\n");
-  });
-
-  it("treats an artifact action it doesn't know (such as the retired merge) as passthrough", () => {
-    const parsed = sanitizePolicy({ ...policy(), artifacts: [{ path: "/robots.txt", action: "merge", contentType: "text/plain" }] });
-    expect(parsed?.artifacts[0].action).toBe("passthrough");
   });
 });
 
@@ -295,24 +274,25 @@ describe("signed agents", () => {
       "signature-input": `sig1=${params}`,
       signature: `sig1=:${btoa(String.fromCharCode(...sig))}:`,
     });
-    const v = verification({ signatureAgents: [{ signatureAgent: "chatgpt.com", agents: ["chatgpt-agent"], fetchedAt: FRESH, keys: [{ kid: "k1", x }] }] });
-    const { res, events } = await run(request, withAccess(access({ verification: v, blockedAgentKeys: ["chatgpt-agent"] })));
+    const v = verification({ signers: [{ host: "chatgpt.com", fetchedAt: FRESH, keys: [{ kid: "k1", x }] }] });
+    // A browser user agent names no agent: the signer's first catalog agent (chatgpt-user) is the one proven.
+    const { res, events } = await run(request, withAccess(access({ blocked: ["chatgpt-user"] }), { verification: v }));
     expect(res.status).toBe(403);
-    expect(events[0]).toMatchObject({ block_rule: "crawler", client: { verification: "verified", agent: "chatgpt-agent" } });
+    expect(events[0]).toMatchObject({ block_rule: "crawler", client: { verification: "verified", agent: "chatgpt-user" } });
   });
 });
 
 describe("Agent Access on proxied paths (/ask, /mcp)", () => {
   const MCP = `${API}/api/v1/middleware/query/mcp`;
   const ASK = `${API}/api/v1/middleware/query/ask`;
-  const proxied = (a: Access | null) =>
-    withAccess(a, { proxies: [{ path: "/mcp", targets: { POST: MCP } }, { path: "/ask", targets: { GET: ASK } }] });
+  const proxied = (a: AccessDoc | null) =>
+    withAccess(a, { content: content({ proxies: [{ path: "/mcp", methods: { POST: MCP } }, { path: "/ask", methods: { GET: ASK } }] }) });
   const mcpCall = (headers: Record<string, string>) =>
     new Request(`${SITE}/mcp`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' });
   const queryCalls = (calls: { url: string }[]) => calls.filter((c) => new URL(c.url).pathname.startsWith("/api/v1/middleware/query/"));
 
   it("answers a blocked bot with a JSON 403 before anything reaches Dedica", async () => {
-    const { res, events, calls, originCalls } = await run(mcpCall({ "user-agent": GPTBOT_UA }), proxied(access({ blockedAgentUa: ["gptbot"] })));
+    const { res, events, calls, originCalls } = await run(mcpCall({ "user-agent": GPTBOT_UA }), proxied(access({ blocked: ["gptbot"] })));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "QUERY_FORBIDDEN", message: "Not available to this client." });
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -325,16 +305,16 @@ describe("Agent Access on proxied paths (/ask, /mcp)", () => {
     const fake = await run(get("/ask?q=hi", { "user-agent": GOOGLEBOT_UA, "cf-connecting-ip": ELSEWHERE_IP }), proxied(access({ impersonators: "block" })));
     expect(fake.res.status).toBe(403);
     expect(fake.events[0]).toMatchObject({ block_rule: "impersonator" });
-    const named = await run(get("/ask?q=hi", { "user-agent": GOOGLEBOT_UA, "cf-connecting-ip": GOOGLE_IP }), proxied(access({ blockedServeHumanUa: ["googlebot"] })));
+    const named = await run(get("/ask?q=hi", { "user-agent": GOOGLEBOT_UA, "cf-connecting-ip": GOOGLE_IP }), proxied(access({ blocked: ["googlebot"] })));
     expect(named.res.status).toBe(403);
     expect(named.events[0]).toMatchObject({ block_rule: "serve_human" });
   });
 
   it("proxies everyone else, and everything while rules aren't enforced", async () => {
     for (const [request, a] of [
-      [mcpCall({ "user-agent": "Claude-User/1.0" }), access({ blockedAgentUa: ["gptbot"] })],
-      [mcpCall({ "user-agent": GPTBOT_UA }), access({ enforce: false, blockedAgentUa: ["gptbot"] })],
-      [mcpCall({ "user-agent": "DedicaAgentGateway/0.1" }), access({ blockedAgentUa: ["gptbot"] })],
+      [mcpCall({ "user-agent": "Claude-User/1.0" }), access({ blocked: ["gptbot"] })],
+      [mcpCall({ "user-agent": GPTBOT_UA }), null],
+      [mcpCall({ "user-agent": "DedicaAgentGateway/0.1" }), access({ blocked: ["gptbot"] })],
     ] as const) {
       const h = harness({ policy: proxied(a), now: () => NOW });
       await h.worker.policies.refresh(env);
@@ -380,23 +360,18 @@ describe("route rules", () => {
   });
 
   it("applies to proxied paths: a blocked route is a JSON 403 for agents, a passthrough one is the site's own", async () => {
-    const proxies = [{ path: "/mcp", targets: { POST: `${API}/api/v1/middleware/query/mcp` } }];
+    const proxies = content({ proxies: [{ path: "/mcp", methods: { POST: `${API}/api/v1/middleware/query/mcp` } }] });
     const call = () => new Request(`${SITE}/mcp`, { method: "POST", headers: { "user-agent": GPTBOT_UA, "content-type": "application/json" }, body: "{}" });
-    const blocked = await run(call(), withAccess(access({ routes: [rule("exact", "/mcp", "block")] }), { proxies }));
+    const blocked = await run(call(), withAccess(access({ routes: [rule("exact", "/mcp", "block")] }), { content: proxies }));
     expect(blocked.res.status).toBe(403);
     expect(await blocked.res.json()).toMatchObject({ error: "QUERY_FORBIDDEN" });
-    const own = await run(call(), withAccess(access({ routes: [rule("exact", "/mcp", "passthrough")] }), { proxies }));
+    const own = await run(call(), withAccess(access({ routes: [rule("exact", "/mcp", "passthrough")] }), { content: proxies }));
     expect(own.originCalls).toHaveLength(1);
     expect(own.calls.filter((c) => new URL(c.url).pathname.startsWith("/api/v1/middleware/query/"))).toHaveLength(0);
   });
 
-  it("ignores routes while rules aren't enforced, and skips rules it doesn't understand", async () => {
-    const off = await run(get("/admin", { "user-agent": GPTBOT_UA }), withAccess(access({ enforce: false, routes: [rule("prefix", "/admin", "block")] })));
+  it("ignores routes while rules aren't enforced", async () => {
+    const off = await run(get("/admin", { "user-agent": GPTBOT_UA }), withAccess(null));
     expect(off.res.status).toBe(200);
-    const parsed = sanitizePolicy({
-      ...policy(),
-      access: { enforce: true, routes: [{ kind: "glob", path: "/a*", action: "block" }, { kind: "exact", path: "nope", action: "block" }, { kind: "exact", path: "/x", action: "serve" }, rule("exact", "/ok", "block")] },
-    });
-    expect(parsed?.access?.routes).toEqual([rule("exact", "/ok", "block")]);
   });
 });

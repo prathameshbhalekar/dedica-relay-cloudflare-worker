@@ -16,6 +16,19 @@ export function underPrefix(pathname: string, prefix: string): boolean {
   return pathname === prefix || pathname.startsWith(prefix.endsWith("/") ? prefix : `${prefix}/`);
 }
 
+/** The suffix of a page's markdown version (`/pricing.md`). */
+export const MARKDOWN_SUFFIX = ".md";
+
+/** The page a markdown URL is the version of (`/pricing.md` -> `/pricing`, `/.md` -> `/`), or null. */
+export function markdownPage(pathname: string): string | null {
+  return pathname.endsWith(MARKDOWN_SUFFIX) ? pathname.slice(0, -MARKDOWN_SUFFIX.length) || "/" : null;
+}
+
+/** Whether a page path may get an agent version: not under any excluded prefix. */
+export function eligible(pathname: string, excludePaths: string[]): boolean {
+  return !excludePaths.some((p) => underPrefix(pathname, p));
+}
+
 /** Static files that never get an agent version: scripts, styles, images, fonts, media and PDFs. */
 export const STATIC_FILE = /\.(?:js|mjs|css|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|eot|map|webp|avif|mp4|webm|mp3|wav|pdf)$/i;
 

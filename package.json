@@ -1,14 +1,15 @@
 {
   "name": "dedica-middleware-cloudflare-worker",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Reference Dedica middleware for Cloudflare Workers (protocol v1): policy, agent detection, serving from Dedica with origin fallback.",
+  "description": "Reference Dedica middleware for Cloudflare Workers (protocol v2): policy, agent detection, serving from Dedica with origin fallback.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "sync-fixture": "cp ../site-optimizer/backend/site_optimizer/middleware/tests/fixtures/policy.fixture.json test/policy.fixture.json"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261019.1",
@@ -19,13 +20,13 @@
   "cloudflare": {
     "bindings": {
       "DEDICA_SITE_ID": {
-        "description": "Your site id: Dedica → onboarding → **Install the Dedica middleware** → **Site id**."
+        "description": "Your site id: Dedica \u2192 onboarding \u2192 **Install the Dedica middleware** \u2192 **Site id**."
       },
       "DEDICA_API_URL": {
         "description": "Dedica's API. Keep `https://api.getdedica.com` unless Dedica tells you otherwise."
       },
       "DEDICA_MIDDLEWARE_TOKEN": {
-        "description": "Your middleware token (starts with `dm_`): Dedica → onboarding → **Create token**. It is shown once."
+        "description": "Your middleware token (starts with `dm_`): Dedica \u2192 onboarding \u2192 **Create token**. It is shown once."
       }
     }
   }

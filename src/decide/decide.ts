@@ -4,101 +4,102 @@
  * Dedica or the origin: the only thing awaited is the client's identity, worked out lazily when a rule needs it.
  */
 
-import type { DocRequest } from "../dedica/serve";
 import { proxyRoute, proxyTarget } from "../dedica/proxy";
-import type { Artifact, Policy } from "../policy/types";
+import type { DocRequest } from "../dedica/serve";
+import type { Policy } from "../policy/compile";
+import type { FileDoc } from "../policy/schema";
 import { NEGOTIATE_TIMEOUT_MS, TEXT } from "../protocol";
-import { detectAgent, isTraditionalBot, keepHumanPage, twinEligible } from "../request/classify";
 import type { RequestContext } from "../request/context";
+import { eligible, markdownPage } from "../util/paths";
 import { accessBlock, routeForRequest } from "./access";
 import { type Decision, ORIGIN, ORIGIN_UNREPORTED } from "./decision";
 
 export async function decide(ctx: RequestContext): Promise<Decision> {
   const { facts, policy: p, env } = ctx;
-  const { request, url, ua } = facts;
-  const blockRule = (p: Policy) => accessBlock(request.headers, ua, url.pathname, p, () => ctx.identity(p));
+  const { request, url } = facts;
 
   // 5. Dedica's own crawler reading the origin's page: never Dedica's content, and unreported. The header proves
   //    nothing (anyone can send it), so it never skips Agent Access: a blocked bot sending it is still blocked.
   if (facts.originFetch) {
-    const rule = facts.read && p ? await blockRule(p) : null;
+    const rule = facts.read && p ? await accessBlock(ctx, p) : null;
     return rule ? { do: "block", rule, json: false } : ORIGIN_UNREPORTED;
   }
+
+  // a. No policy, or not in autopilot (no `content`): the origin answers everything.
+  const content = p?.content;
+  if (!p || !content) return ORIGIN;
 
   // b. Paths the policy proxies to Dedica (`/ask`, `/mcp`, ...), any method; independent of agent detection. A bot
   //    the site's Agent Access rules block gets a JSON 403 before anything reaches Dedica, and a `passthrough` route
   //    leaves the path to the origin (the site's own `/mcp`, say).
-  const proxied = p && proxyRoute(url, request.method, p);
-  if (p && proxied) {
-    const rule = await blockRule(p);
+  const proxied = proxyRoute(url, request.method, content);
+  if (proxied) {
+    const rule = await accessBlock(ctx, p);
     if (rule) return { do: "block", rule, json: true };
     if (routeForRequest(p, url.pathname)?.action === "passthrough") return ORIGIN;
     const target = proxyTarget(proxied, url, env);
     if (target) return { do: "proxy", target };
   }
 
-  // c, d. Only GET and HEAD, and only in autopilot, get anything from Dedica.
-  if (!facts.read || !p || p.mode !== "autopilot") return ORIGIN;
+  // c. Only GET and HEAD get anything else from Dedica.
+  if (!facts.read) return ORIGIN;
 
   // e. A file Dedica manages (llms.txt, robots.txt, ...), for every visitor. Before the block rules, so a blocked
   //    crawler can still read the robots.txt that tells it so.
-  const artifact = p.artifacts.find((a) => a.path === url.pathname);
-  if (artifact) return artifactDecision(artifact);
+  const file = content.files.find((f) => f.path === url.pathname);
+  if (file) return fileDecision(file, p);
 
   // f. Agent Access: a bot this site blocks, or a route it blocks for agents (see access.ts).
-  const rule = await blockRule(p);
+  const rule = await accessBlock(ctx, p);
   if (rule) return { do: "block", rule, json: false };
 
   // g. A `passthrough` route leaves the path, and its `.md` version, to the origin.
   if (routeForRequest(p, url.pathname)?.action === "passthrough") return ORIGIN;
 
-  const questionParams = p.twins.questionParams ?? [];
-  const asksQuestion =
-    questionParams.some((key) => Boolean(url.searchParams.get(key)?.trim())) || (questionParams.length > 0 && /~~.+/.test(url.pathname));
+  const client = ctx.client(p);
 
-  // h. Search engines, link previews and (unknown) crawlers keep the person's page, unless they ask a question.
-  if (keepHumanPage(ua, p.detection, asksQuestion)) return { do: "origin", outcome: "human_page" };
+  // h. Search engines, link previews and generic crawlers keep the person's page, at any URL.
+  if (client.keepsHumanPage) return { do: "origin", outcome: "human_page" };
 
-  // i. An explicit markdown request (`/pricing.md`), for anyone who asks. A declared question makes the answer
-  //    personal, so it is never shared-cached.
-  if (p.twins.enabled && url.pathname.endsWith(p.twins.suffix)) {
-    const page = url.pathname.slice(0, -p.twins.suffix.length) || "/";
-    if (!twinEligible(page, p.twins)) return ORIGIN;
-    const shared = !questionParams.some((key) => url.searchParams.has(key));
-    const doc: DocRequest = { path: url.pathname, search: url.search, category: "public", contentType: TEXT, shared };
-    return { do: "serve", doc, outcome: "twin" };
+  // i. An explicit markdown URL (`/pricing.md`), for anyone else who asks. The same for everyone, so shared caches
+  //    may keep it.
+  const page = markdownPage(url.pathname);
+  if (page !== null) {
+    if (!eligible(page, content.excludePaths)) return ORIGIN;
+    return { do: "serve", doc: doc(url, p, "public"), outcome: "twin" };
   }
 
   // j. The agent version of a page, for a detected agent or a client asking for `text/markdown`. Never for a search
   //    engine, an API call or a page's sub-request, and never a long wait: the client asked for the origin's page.
-  if (!p.twins.negotiate || !facts.pageRead) return ORIGIN;
-  const wantsAgentVersion = facts.acceptsMarkdown || detectAgent(request.headers, p.detection);
-  if (wantsAgentVersion && !isTraditionalBot(ua, p.detection) && twinEligible(url.pathname, p.twins)) {
-    const doc: DocRequest = {
-      path: url.pathname,
-      search: url.search,
-      category: "eligible",
-      contentType: TEXT,
-      shared: false,
-      timeoutMs: NEGOTIATE_TIMEOUT_MS,
-    };
-    return { do: "serve", doc, outcome: "negotiated" };
+  if (
+    content.negotiate &&
+    facts.pageRead &&
+    !client.searchEngine &&
+    (facts.acceptsMarkdown || client.wantsAgentVersion) &&
+    eligible(url.pathname, content.excludePaths)
+  ) {
+    return { do: "serve", doc: doc(url, p, "eligible"), outcome: "negotiated" };
   }
 
   // k.
   return ORIGIN;
 }
 
-function artifactDecision(artifact: Artifact): Decision {
-  const doc: DocRequest = { path: artifact.path, version: artifact.version, category: "public", contentType: artifact.contentType, shared: true };
-  switch (artifact.action ?? "proxy") {
-    case "proxy":
-      return { do: "serve", doc, outcome: "artifact" };
-    case "fallback":
-      return { do: "fallback", doc };
-    case "block":
-      return { do: "block", rule: "file", json: false };
-    default:
-      return ORIGIN;
-  }
+/** A page's markdown version (`public`, shared) or its agent version at the page URL (`eligible`, private). */
+function doc(url: URL, p: Policy, category: DocRequest["category"]): DocRequest {
+  const shared = category === "public";
+  return {
+    path: url.pathname,
+    search: url.search,
+    version: p.version,
+    category,
+    contentType: TEXT,
+    shared,
+    timeoutMs: shared ? undefined : NEGOTIATE_TIMEOUT_MS,
+  };
+}
+
+function fileDecision(file: FileDoc, p: Policy): Decision {
+  const doc: DocRequest = { path: file.path, version: file.version || p.version, category: "public", contentType: file.contentType, shared: true };
+  return file.action === "fallback" ? { do: "fallback", doc } : { do: "serve", doc, outcome: "artifact" };
 }

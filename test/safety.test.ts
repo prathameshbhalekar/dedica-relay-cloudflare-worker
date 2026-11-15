@@ -3,9 +3,9 @@
 import { describe, expect, it } from "vitest";
 
 import { NEGOTIATE_TIMEOUT_MS } from "../src/protocol";
-import { sanitizePolicy } from "../src/policy/sanitize";
-import fixture from "./policy.fixture.json";
-import { API, FakeCtx, GPTBOT_UA, env, get, harness, policy, serveCalls } from "./helpers";
+import { compile } from "../src/policy/compile";
+import { type PolicyDoc, parsePolicy } from "../src/policy/schema";
+import { FakeCtx, GPTBOT_UA, backendPolicy, content, env, get, harness, policy, serveCalls } from "./helpers";
 
 const markdown = () => new Response("# Pricing\n", { status: 200, headers: { "content-type": "text/markdown; charset=utf-8" } });
 
@@ -114,86 +114,70 @@ describe("a slow Dedica", () => {
   });
 });
 
-describe("Dedica can hand a request back to the origin", () => {
-  it("serves the origin when Dedica answers with x-dedica-content-fallback: origin, without backing off", async () => {
-    const h = harness({ serve: () => new Response("# ignored", { status: 200, headers: { "x-dedica-content-fallback": "origin" } }) });
-    const ctx = new FakeCtx();
-    expect(await (await h.worker.fetch(get("/a.md", { "user-agent": GPTBOT_UA }), env, ctx)).text()).toBe("origin page");
-    expect(await (await h.worker.fetch(get("/b.md", { "user-agent": GPTBOT_UA }), env, ctx)).text()).toBe("origin page");
-    expect(serveCalls(h.calls)).toHaveLength(2);
-  });
-
-  it("does the same for a proxied path, and the origin still gets the body", async () => {
-    const target = `${API}/api/v1/middleware/query/mcp`;
-    const h = harness({
-      policy: policy({ proxies: [{ path: "/mcp", targets: { POST: target } }] }),
-      origin: (request) => new Response(`origin saw ${request.method}`, { status: 200 }),
-      // The proxy target declines.
-      dedica: () => new Response("no", { status: 200, headers: { "x-dedica-content-fallback": "origin" } }),
-    });
-    await h.worker.policies.refresh(env);
-    const res = await h.worker.fetch(get("/mcp", { "content-type": "application/json" }, { method: "POST", body: "{}" }), env, new FakeCtx());
-    expect(await res.text()).toBe("origin saw POST");
-    expect(await h.originCalls[0].text()).toBe("{}");
-  });
-});
-
 describe("policy validation", () => {
-  it("keeps the real backend policy as it is", () => {
-    expect(sanitizePolicy(fixture)).toEqual(fixture);
+  const rejected = (raw: unknown) => {
+    const parsed = parsePolicy(raw);
+    return "error" in parsed ? parsed.error : null;
+  };
+  const fixture = backendPolicy();
+  const agent0 = fixture.agents[0];
+
+  it("takes the backend's policy as it is, every section", () => {
+    const parsed = parsePolicy(fixture);
+    expect("policy" in parsed && parsed.policy).toEqual(fixture);
+    const compiled = compile(fixture);
+    expect(compiled.detect.contains.length + compiled.tools.contains.length).toBe(fixture.agents.reduce((n, a) => n + a.ua.length, 0));
+    expect(compiled.access?.blocked.size).toBe(fixture.access?.blocked.length);
+    expect(compiled.verification?.signers.size).toBe(fixture.verification?.signers.length);
+    expect(compiled.signerHosts).toContain("chatgpt.com");
   });
 
-  it("rejects a policy it can't use safely", () => {
-    expect(sanitizePolicy({ ...fixture, mode: "everything" })).toBeNull();
-    expect(sanitizePolicy({ ...fixture, detection: null })).toBeNull();
-    expect(sanitizePolicy({ ...fixture, twins: "yes" })).toBeNull();
-    expect(sanitizePolicy(null)).toBeNull();
+  it("rejects, whole, a policy that breaks any rule", () => {
+    const bad: [string, unknown][] = [
+      ["no policy", null],
+      ["another schema", { ...fixture, schemaVersion: 1 }],
+      ["an unknown mode", { ...fixture, mode: "everything" }],
+      ["an empty needle (it would match every client)", { ...fixture, agents: [{ ...agent0, ua: [""] }] }],
+      ["an uppercase needle (it could never match)", { ...fixture, agents: [{ ...agent0, ua: ["GPTBot"] }] }],
+      ["an unknown agent kind", { ...fixture, agents: [{ ...agent0, kind: "robot" }] }],
+      ["a pattern that isn't a regular expression", { ...fixture, patterns: { ...fixture.patterns, botLike: "(" } }],
+      ["a file action this worker doesn't know", { ...fixture, content: content({ files: [{ path: "/a", action: "teleport", contentType: "text/plain", version: "" }] as never }) }],
+      ["a serve base that isn't a URL", { ...fixture, content: content({ serveBaseUrl: "not a url" }) }],
+      ["a proxied path that isn't a path", { ...fixture, content: content({ proxies: [{ path: "mcp", methods: { POST: "https://api.dedica.test/mcp" } }] }) }],
+      ["a missing section (null is how a policy says none)", (({ access: _, ...rest }: PolicyDoc) => rest)(fixture)],
+      ["an unusable age limit on identity data", { ...fixture, verification: { ...fixture.verification!, maxAgeSeconds: 0 } }],
+      ["a TTL that isn't a number", { ...fixture, ttlSeconds: "30" }],
+    ];
+    for (const [why, raw] of bad) expect(rejected(raw), why).not.toBeNull();
   });
 
-  it("drops empty needles, so they can't match every client", () => {
-    const p = sanitizePolicy({ ...fixture, detection: { ...fixture.detection, agentUa: ["", "gptbot", 7], signatureAgentDomains: [""] } });
-    expect(p?.detection.agentUa).toEqual(["gptbot"]);
-    expect(p?.detection.signatureAgentDomains).toEqual([]);
-  });
-
-  it("serves nothing to an ordinary client when the policy has an empty agent needle", async () => {
-    const bad = policy();
-    bad.detection.agentUa = [""];
-    bad.detection.botLikePattern = "";
-    const h = harness({ policy: bad, serve: () => markdown() });
+  it("serves nothing while the policy is rejected", async () => {
+    const h = harness({ policy: { ...policy(), mode: "everything" } as never, serve: () => markdown() });
     await h.worker.policies.refresh(env);
-    const res = await h.worker.fetch(get("/pricing", { "user-agent": "SomeApp/1.0" }), env, new FakeCtx());
+    expect(h.worker.policies.policy).toBeNull();
+    const res = await h.worker.fetch(get("/pricing.md", { "user-agent": GPTBOT_UA }), env, new FakeCtx());
     expect(await res.text()).toBe("origin page");
     expect(serveCalls(h.calls)).toHaveLength(0);
   });
 
-  it("turns twins off when the suffix is empty, instead of making every URL a markdown URL", () => {
-    const p = sanitizePolicy({ ...fixture, twins: { ...fixture.twins, suffix: "" } });
-    expect(p?.twins.enabled).toBe(false);
+  it("ignores an IP range that isn't a CIDR, so one vendor's odd entry can't switch the worker off", () => {
+    const v = { ...fixture.verification!, ipSets: { "openai-gptbot": { cidrs: ["nonsense", "20.171.207.0/24"], fetchedAt: "2026-11-01T00:00:00Z" } } };
+    expect(compile({ ...fixture, verification: v }).verification?.ipSets.get("openai-gptbot")?.cidrs).toHaveLength(1);
   });
 
   it("clamps the TTL to 5–300 s", async () => {
-    expect(sanitizePolicy({ ...fixture, ttlSeconds: 0 })?.ttlSeconds).toBe(5);
-    expect(sanitizePolicy({ ...fixture, ttlSeconds: 86_400 })?.ttlSeconds).toBe(300);
-    expect(sanitizePolicy({ ...fixture, ttlSeconds: "30" })?.ttlSeconds).toBe(30);
+    const ttl = (ttlSeconds: number) => {
+      const parsed = parsePolicy({ ...fixture, ttlSeconds });
+      return "policy" in parsed ? parsed.policy.ttlSeconds : null;
+    };
+    expect(ttl(0)).toBe(5);
+    expect(ttl(86_400)).toBe(300);
 
     const t = 0;
     const h = harness({ policy: policy({ ttlSeconds: 0 }), now: () => t });
     const ctx = new FakeCtx();
     for (const path of ["/a.md", "/b.md", "/c.md"]) await h.worker.fetch(get(path, { "user-agent": GPTBOT_UA }), env, ctx);
     expect(h.calls.filter((c) => new URL(c.url).pathname === "/api/v1/middleware/policy/")).toHaveLength(1);
-  });
-
-  it("keeps an artifact with an unknown action for the origin", async () => {
-    const p = sanitizePolicy({ ...fixture, artifacts: [{ path: "/notes.md", contentType: "text/markdown", action: "teleport" }] });
-    expect(p?.artifacts[0].action).toBe("passthrough");
-    const h = harness({ policy: policy({ artifacts: [{ path: "/notes.md", contentType: "text/markdown", action: "teleport" as never }] }), serve: () => markdown() });
-    const res = await h.worker.fetch(get("/notes.md", { "user-agent": GPTBOT_UA }), env, new FakeCtx());
-    expect(await res.text()).toBe("origin page");
-  });
-
-  it("drops a serve setting with no usable base URL", () => {
-    expect(sanitizePolicy({ ...fixture, serve: { baseUrl: "not a url", version: "1" } })?.serve).toBeNull();
   });
 });
 

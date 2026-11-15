@@ -16,9 +16,9 @@ import type { Env } from "../config";
 import type { BlockRule } from "../decide/access";
 import type { Category, Outcome } from "../decide/decision";
 import type { Identity, Tier } from "../identity/verdict";
-import type { Policy } from "../policy/types";
+import type { Policy } from "../policy/compile";
 import { SERVED_HEADER } from "../protocol";
-import { type ClientMatch, clientMatch } from "../request/classify";
+import { type Client, clientKind } from "../request/classify";
 
 /** How the worker answered a request, turned into an event. */
 export interface Trace {
@@ -42,7 +42,7 @@ export interface TrafficEvent {
   category: "public" | "eligible" | null;
   /** Null when the worker has no policy yet (the detection lists come from it). */
   client: {
-    kind: ClientMatch["kind"];
+    kind: ReturnType<typeof clientKind>;
     matched: string | null;
     signature_agent: string | null;
     /** Who the bot really is (Agent Access); absent without verification data in the policy. Never the IP. */
@@ -63,25 +63,16 @@ export interface TrafficEvent {
 const USER_AGENT_MAX = 512;
 const PATH_MAX = 2048;
 const QUERY_MAX = 2048;
-/** The only query parameters reported (plus the policy's question parameters): how a visit from an AI answer is attributed. */
+/** The only query parameters reported: how a visit from an AI answer is attributed. */
 const KEEP_PARAMS = ["utm_source", "utm_medium", "utm_campaign", "ref", "source"];
 const REPORTED_HEADERS = ["accept", "accept-language", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-site"];
 
-function questionParams(policy: Policy | null): string[] {
-  const names = policy?.twins?.questionParams;
-  return Array.isArray(names) ? names.filter((n) => typeof n === "string" && n.length > 0) : [];
-}
-
-/** The attribution parameters and the question asked, nothing else; capped by shortening the longest value. */
-export function allowedQuery(url: URL, policy: Policy | null): string | undefined {
+/** The attribution parameters, nothing else; capped by shortening the longest value. */
+export function allowedQuery(url: URL): string | undefined {
   const kept = new URLSearchParams();
   for (const key of KEEP_PARAMS) {
     const value = url.searchParams.get(key);
     if (value) kept.set(key, value.slice(0, 128));
-  }
-  for (const key of questionParams(policy)) {
-    const value = url.searchParams.get(key);
-    if (value) kept.set(key, value);
   }
   let qs = kept.toString();
   while (qs.length + 1 > QUERY_MAX) {
@@ -123,13 +114,14 @@ export async function buildEvent(
   response: Response,
   trace: Trace,
   policy: Policy | null,
+  /** Who the client looks like under `policy` (null without one). */
+  client: Client | null,
   env: Env,
   startedAt: number,
   now: number,
   identity: Identity | null = null,
 ): Promise<TrafficEvent> {
   const url = new URL(request.url);
-  const client = policy ? clientMatch(request.headers, policy.detection) : null;
   const verdict = identity ? { verification: identity.tier, agent: identity.agent } : {};
   const headers: Record<string, string> = {};
   for (const name of REPORTED_HEADERS) {
@@ -144,13 +136,13 @@ export async function buildEvent(
     method: request.method,
     host: url.host,
     path: url.pathname.slice(0, PATH_MAX),
-    query: allowedQuery(url, policy),
+    query: allowedQuery(url),
     status: response.status,
     latency_ms: Math.max(0, Math.round(now - startedAt)),
     outcome: trace.outcome,
     served_by_dedica: response.headers.get(SERVED_HEADER) === "1" || trace.outcome === "proxied" || trace.outcome === "blocked",
     category: trace.category,
-    client: client && { kind: client.kind, matched: client.matched, signature_agent: client.signatureAgent, ...verdict },
+    client: client && { kind: clientKind(client), matched: client.matched, signature_agent: client.signer, ...verdict },
     block_rule: trace.blockRule,
     user_agent: (request.headers.get("user-agent") ?? "").slice(0, USER_AGENT_MAX),
     referer: refererOf(request.headers),

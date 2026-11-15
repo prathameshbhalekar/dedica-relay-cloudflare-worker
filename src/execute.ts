@@ -42,7 +42,6 @@ export async function execute(decision: Decision, ctx: RequestContext, deps: Exe
       return origin(decision.outcome, decision.report !== false);
 
     case "block":
-      if (decision.rule === "file") return { response: blocked(), outcome: "blocked", category: "public", report: true };
       return { response: decision.json ? blockedJson() : blocked(), outcome: "blocked", category: null, blockRule: decision.rule, report: true };
 
     case "serve": {
@@ -72,7 +71,9 @@ export async function execute(decision: Decision, ctx: RequestContext, deps: Exe
 
 /** Dedica's document, or null when it has none or the call failed (logged). */
 function document(doc: DocRequest, ctx: RequestContext, deps: ExecuteDeps): Promise<Response | null> {
-  return deps.documents.get(doc, ctx.policy?.serve ?? null, ctx.env, ctx.facts.request).catch((error: unknown) => {
+  const baseUrl = ctx.policy?.content?.serveBaseUrl;
+  if (!baseUrl) return Promise.resolve(null);
+  return deps.documents.get(doc, baseUrl, ctx.env, ctx.facts.request).catch((error: unknown) => {
     console.warn(`[dedica] serving failed; using origin: ${error}`);
     return null;
   });

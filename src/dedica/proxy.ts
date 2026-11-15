@@ -1,25 +1,23 @@
 /**
  * Paths on the customer's domain that the policy proxies to Dedica (`/ask`, `/mcp`, ...).
  *
- * The policy alone names them: each entry of `policy.proxies` is a path plus, per method it takes, the Dedica URL
+ * The policy alone names them: each entry of `content.proxies` is a path plus, per method it takes, the Dedica URL
  * that answers it. Nothing is hardcoded. Dedica's own answers, errors included, are relayed as they are, streamed.
  */
 
 import { apiBase, type Env } from "../config";
-import type { Policy } from "../policy/types";
-import { CONTENT_FALLBACK_HEADER, PROXY_BODY_MAX, PROXY_HEADERS_MAX, PROXY_TIMEOUT_MS, SERVED_HEADER } from "../protocol";
+import type { ContentDoc } from "../policy/schema";
+import { PROXY_BODY_MAX, PROXY_HEADERS_MAX, PROXY_TIMEOUT_MS, SERVED_HEADER } from "../protocol";
 import { trimTrailingSlashes } from "../util/paths";
 import { readCapped } from "../util/stream";
 import { type DedicaClient, identityHeaders } from "./client";
 
-/** The Dedica URL the policy proxies this path and method to, or null. Only in autopilot. */
-export function proxyRoute(url: URL, method: string, policy: Policy | null): string | null {
-  if (!policy || policy.mode !== "autopilot") return null;
+/** The Dedica URL the policy proxies this path and method to, or null. The first entry for a path counts. */
+export function proxyRoute(url: URL, method: string, content: ContentDoc): string | null {
   const path = trimTrailingSlashes(url.pathname);
-  const route = policy.proxies.find((p) => /^\/[^?#\s]+$/.test(p.path) && trimTrailingSlashes(p.path) === path);
+  const route = content.proxies.find((p) => trimTrailingSlashes(p.path) === path);
   // `Object.hasOwn`: a method named like an Object.prototype member (`constructor`) is not a target.
-  const target = route && Object.hasOwn(route.targets, method) ? route.targets[method] : undefined;
-  return typeof target === "string" ? target : null;
+  return route && Object.hasOwn(route.methods, method) ? route.methods[method] : null;
 }
 
 /**
@@ -77,8 +75,7 @@ async function forwardedBody(request: Request, signal: AbortSignal): Promise<Uin
 }
 
 /**
- * Dedica's answer for a proxied path, streamed; null when Dedica can't be reached, declines the request, or the
- * request is too large. `request` is the visitor's: it is cloned, so the origin still gets the body.
+ * Dedica's answer for a proxied path, streamed; null when Dedica can't be reached or the request is too large. `request` is the visitor's: it is cloned, so the origin still gets the body.
  */
 export async function proxy(request: Request, target: URL, env: Env, client: DedicaClient): Promise<Response | null> {
   const visitor = request.clone();
@@ -99,13 +96,6 @@ export async function proxy(request: Request, target: URL, env: Env, client: Ded
       headers: forwardedHeaders(visitor, env),
       signal: controller.signal,
     });
-    // Dedica declines this one: the origin answers (it still has the original body).
-    if (upstream.headers.get(CONTENT_FALLBACK_HEADER) === "origin") {
-      controller.abort();
-      cleanup();
-      void upstream.body?.cancel().catch(() => {});
-      return null;
-    }
     const headers = new Headers({ "cache-control": "private, no-store", [SERVED_HEADER]: "1", "x-accel-buffering": "no" });
     for (const name of RELAYED_HEADERS) {
       const value = upstream.headers.get(name);

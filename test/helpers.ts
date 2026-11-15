@@ -1,13 +1,13 @@
 import fixture from "./policy.fixture.json";
 import type { Ctx, Env } from "../src/config";
 import { createWorker } from "../src/worker";
-import type { Policy } from "../src/policy/types";
+import type { AccessDoc, ContentDoc, PolicyDoc } from "../src/policy/schema";
 
 export const API = "https://api.dedica.test";
 export const SITE = "https://shop.example";
 
 export const env: Env = {
-  DEDICA_SITE_ID: fixture.siteId,
+  DEDICA_SITE_ID: "00000000-0000-4000-8000-000000000001",
   DEDICA_API_URL: API,
   DEDICA_MIDDLEWARE_TOKEN: "dm_test",
   DEDICA_SALT: "salt_test",
@@ -19,9 +19,33 @@ export const GOOGLEBOT_UA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www
 
 export const browserHeaders = { "user-agent": BROWSER_UA, "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
 
-export function policy(overrides: Partial<Policy> = {}): Policy {
-  // JSON imports widen tuples to arrays, so the fixture is cast through unknown.
-  return { ...(structuredClone(fixture) as unknown as Policy), ...overrides };
+/** The backend's policy, exactly as Dedica builds it (`npm run sync-fixture`). Every section has something in it. */
+export function backendPolicy(): PolicyDoc {
+  return structuredClone(fixture) as unknown as PolicyDoc;
+}
+
+/**
+ * A neutral autopilot policy for tests: the backend's agent catalog and patterns, serving on, but no files, no
+ * proxied paths, no Agent Access rules and no verification data. Tests add what they exercise.
+ */
+export function policy(overrides: Partial<PolicyDoc> = {}): PolicyDoc {
+  const base = backendPolicy();
+  return { ...base, access: null, verification: null, content: { ...base.content!, files: [], proxies: [] }, ...overrides };
+}
+
+/** The neutral policy's `content`, with overrides. */
+export function content(overrides: Partial<ContentDoc> = {}): ContentDoc {
+  return { ...policy().content!, ...overrides };
+}
+
+/** Agent Access rules that block nothing, with overrides. */
+export function access(overrides: Partial<AccessDoc> = {}): AccessDoc {
+  return { impersonators: "flag", blocked: [], routes: [], ...overrides };
+}
+
+/** A policy in report mode: nothing is served or blocked. */
+export function reportPolicy(): PolicyDoc {
+  return policy({ mode: "report", content: null });
 }
 
 export class FakeCtx implements Ctx {
@@ -50,7 +74,7 @@ type Handler = (url: URL, init?: RequestInit) => Response | Promise<Response>;
 /** A worker whose Dedica and origin calls are fakes. Dedica's policy is `current`, served by default. */
 export function harness(
   options: {
-    policy?: Policy | null;
+    policy?: PolicyDoc | null;
     serve?: Handler;
     origin?: (request: Request) => Response;
     now?: () => number;

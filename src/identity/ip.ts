@@ -73,17 +73,6 @@ export function parseCidr(text: string): Cidr | null {
   return { v6: ip.v6, value: ip.value & mask, mask };
 }
 
-const compiledSets = new WeakMap<object, Cidr[]>();
-
-export function compiledRanges(set: { cidrs: string[] }): Cidr[] {
-  let cidrs = compiledSets.get(set);
-  if (!cidrs) {
-    cidrs = set.cidrs.map(parseCidr).filter((c): c is Cidr => c !== null);
-    compiledSets.set(set, cidrs);
-  }
-  return cidrs;
-}
-
 export function inRanges(ip: Ip, cidrs: Cidr[]): boolean {
   return cidrs.some((c) => c.v6 === ip.v6 && (ip.value & c.mask) === c.value);
 }

@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import { TRANSMITTER } from "../src/protocol";
+import { TRANSMITTER, VERSION } from "../src/protocol";
 import { serveTarget } from "../src/dedica/serve";
-import type { Proxy } from "../src/policy/types";
+import type { ProxyDoc } from "../src/policy/schema";
 import {
   API,
   FakeCtx,
   GOOGLEBOT_UA,
   GPTBOT_UA,
   browserHeaders,
+  content,
   env,
   eventBodies,
   get,
   harness,
   header,
   policy,
+  reportPolicy,
   serveCalls,
 } from "./helpers";
 
@@ -24,7 +26,7 @@ describe("connectivity", () => {
   it("serves the well-known file without calling Dedica", async () => {
     const { worker, calls } = harness();
     const res = await worker.fetch(get("/.well-known/dedica.json"), env, new FakeCtx());
-    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: "1.4.0" });
+    expect(await res.json()).toEqual({ site_id: env.DEDICA_SITE_ID, middleware: "cloudflare-worker", version: VERSION });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(calls).toHaveLength(0);
   });
@@ -41,7 +43,7 @@ describe("connectivity", () => {
     await worker.heartbeat(env);
     expect(calls[0].url).toBe(`${API}/api/v1/middleware/heartbeat/`);
     expect(header(calls[0], "x-dedica-middleware-token")).toBe("dm_test");
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: "1.4.0" });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ middleware: "cloudflare-worker", version: VERSION });
   });
 
   it("passes everything through when not configured", async () => {
@@ -54,7 +56,7 @@ describe("connectivity", () => {
 
 describe("report mode", () => {
   it("fetches the policy (with its transmitter) but always lets the origin answer", async () => {
-    const { worker, calls, originCalls } = harness({ policy: policy({ mode: "report", serve: null }) });
+    const { worker, calls, originCalls } = harness({ policy: reportPolicy() });
     const res = await worker.fetch(get("/pricing.md", { "user-agent": GPTBOT_UA }), env, new FakeCtx());
     expect(await res.text()).toBe("origin page");
     expect(header(calls[0], "x-dedica-transmitter")).toBe(TRANSMITTER);
@@ -76,7 +78,7 @@ describe("autopilot serving", () => {
     const call = serveCalls(calls)[0];
     expect(call.url).toBe(`${API}/api/v1/middleware/serve/pricing.md`);
     expect(header(call, "x-dedica-category")).toBe("public");
-    expect(header(call, "x-dedica-version")).toBe(`v1:${policy().serve?.version}`);
+    expect(header(call, "x-dedica-version")).toBe(`v2:${policy().version}`);
   });
 
   it("negotiates the agent version of a page for an agent, privately cached", async () => {
@@ -136,12 +138,12 @@ describe("autopilot serving", () => {
   });
 
   it("proxies managed artifacts for every visitor", async () => {
-    const p = policy({ artifacts: [{ path: "/llms.txt", contentType: "text/plain; charset=utf-8", action: "proxy", version: "7" }] });
+    const p = policy({ content: content({ files: [{ path: "/llms.txt", contentType: "text/plain; charset=utf-8", action: "proxy", version: "7" }] }) });
     const { worker, calls } = harness({ policy: p, serve: () => new Response(new TextEncoder().encode("# Shop\n"), { status: 200 }) }); // no content-type: the artifact's applies
     const res = await worker.fetch(get("/llms.txt", browserHeaders), env, new FakeCtx());
     expect(await res.text()).toBe("# Shop\n");
     expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
-    expect(header(serveCalls(calls)[0], "x-dedica-version")).toBe("v1:7");
+    expect(header(serveCalls(calls)[0], "x-dedica-version")).toBe("v2:7");
   });
 
   it("forwards validators only for shared files and relays 304", async () => {
@@ -171,7 +173,7 @@ describe("autopilot serving", () => {
 
 describe("discovery files and agent extras", () => {
   const fallbackPolicy = () =>
-    policy({ artifacts: [{ path: "/openapi.json", contentType: "application/json", action: "fallback", version: "3" }, { path: "/llms.txt", contentType: "text/plain", action: "proxy" }] });
+    policy({ content: content({ files: [{ path: "/openapi.json", contentType: "application/json", action: "fallback", version: "3" }, { path: "/llms.txt", contentType: "text/plain", action: "proxy", version: "" }] }) });
   const spec = () => Response.json({ openapi: "3.1.0", from: "dedica" });
 
   it("serves a fallback artifact from Dedica when the origin has no such file", async () => {
@@ -181,7 +183,7 @@ describe("discovery files and agent extras", () => {
       expect(await res.json()).toEqual({ openapi: "3.1.0", from: "dedica" });
       expect(res.headers.get("x-dedica-served")).toBe("1");
       expect(originCalls).toHaveLength(1);
-      expect(header(serveCalls(calls)[0], "x-dedica-version")).toBe("v1:3");
+      expect(header(serveCalls(calls)[0], "x-dedica-version")).toBe("v2:3");
     }
   });
 
@@ -229,12 +231,12 @@ describe("discovery files and agent extras", () => {
 });
 
 describe("serve target", () => {
-  const serve = policy().serve!;
+  const base = policy().content!.serveBaseUrl;
   it("keeps paths inside the serve base", () => {
-    expect(serveTarget(serve, { path: "/docs/a.md", search: "?q=1" })?.url).toBe(`${API}/api/v1/middleware/serve/docs/a.md?q=1`);
-    expect(serveTarget(serve, { path: "//evil.example/a.md" })?.url).toBe(`${API}/api/v1/middleware/serve/evil.example/a.md`);
-    expect(serveTarget(serve, { path: "/%2e%2e/policy" })).toBeNull();
-    expect(serveTarget(serve, { path: "/a%2F..%2Fpolicy" })).toBeNull();
+    expect(serveTarget(base, { path: "/docs/a.md", search: "?q=1" })).toBe(`${API}/api/v1/middleware/serve/docs/a.md?q=1`);
+    expect(serveTarget(base, { path: "//evil.example/a.md" })).toBe(`${API}/api/v1/middleware/serve/evil.example/a.md`);
+    expect(serveTarget(base, { path: "/%2e%2e/policy" })).toBeNull();
+    expect(serveTarget(base, { path: "/a%2F..%2Fpolicy" })).toBeNull();
   });
 });
 
@@ -274,7 +276,7 @@ describe("policy cache", () => {
   });
 
   it("ignores a policy in an unknown schema", async () => {
-    const { worker, calls } = harness({ policy: { ...policy(), schemaVersion: 2 }, serve: () => markdown() });
+    const { worker, calls } = harness({ policy: { ...policy(), schemaVersion: 3 } as never, serve: () => markdown() });
     const res = await worker.fetch(get("/pricing.md", { "user-agent": GPTBOT_UA }), env, new FakeCtx());
     expect(await res.text()).toBe("origin page");
     expect(serveCalls(calls)).toHaveLength(0);
@@ -296,12 +298,12 @@ describe("policy cache", () => {
 describe("proxied paths", () => {
   const BASE = `${API}/api/v1/middleware/query`;
   // The shape Dedica's policy sends (mcp_gateway McpQuerySelector.proxies_get).
-  const ASK: Proxy = { path: "/ask", targets: { GET: `${BASE}/ask`, POST: `${BASE}/ask/nlweb` } };
-  const MCP: Proxy = { path: "/mcp", targets: { POST: `${BASE}/mcp` } };
+  const ASK: ProxyDoc = { path: "/ask", methods: { GET: `${BASE}/ask`, POST: `${BASE}/ask/nlweb` } };
+  const MCP: ProxyDoc = { path: "/mcp", methods: { POST: `${BASE}/mcp` } };
 
   /** A harness whose isolate already has the policy. */
-  async function warm(proxies: Proxy[]) {
-    const h = harness({ policy: policy({ proxies }) });
+  async function warm(proxies: ProxyDoc[]) {
+    const h = harness({ policy: policy({ content: content({ proxies }) }) });
     await h.worker.policies.refresh(env);
     h.calls.length = 0;
     return h;
@@ -331,13 +333,13 @@ describe("proxied paths", () => {
   });
 
   it("proxies any path the policy lists", async () => {
-    const { worker, calls } = await warm([{ path: "/agents/search", targets: { GET: `${BASE}/search` } }]);
+    const { worker, calls } = await warm([{ path: "/agents/search", methods: { GET: `${BASE}/search` } }]);
     await worker.fetch(get("/agents/search?q=x"), env, new FakeCtx());
     expect(calls.map((c) => c.url)).toEqual([`${BASE}/search?q=x`]);
   });
 
   it("passes an unlisted method, a too-large body or a target off Dedica's origin through, body intact", async () => {
-    const { worker, originCalls } = await warm([MCP, { path: "/evil", targets: { POST: "https://evil.example/x" } }]);
+    const { worker, originCalls } = await warm([MCP, { path: "/evil", methods: { POST: "https://evil.example/x" } }]);
     expect(await (await worker.fetch(get("/mcp"), env, new FakeCtx())).text()).toBe("origin page");
     const big = "x".repeat(40_000);
     await worker.fetch(get("/mcp", {}, { method: "POST", body: big }), env, new FakeCtx());
@@ -346,12 +348,12 @@ describe("proxied paths", () => {
   });
 
   it("waits for the policy on a cold isolate, so an agent's first /mcp or /ask call reaches Dedica", async () => {
-    const { worker, calls, originCalls } = harness({ policy: policy({ proxies: [ASK, MCP] }) });
+    const { worker, calls, originCalls } = harness({ policy: policy({ content: content({ proxies: [ASK, MCP] }) }) });
     const mcp = await worker.fetch(post("/mcp"), env, new FakeCtx());
     expect(mcp.status).toBe(500); // the fake's answer for a proxied call, relayed
     expect(originCalls).toHaveLength(0);
 
-    const cold = harness({ policy: policy({ proxies: [ASK, MCP] }) });
+    const cold = harness({ policy: policy({ content: content({ proxies: [ASK, MCP] }) }) });
     await cold.worker.fetch(get("/ask/?q=x"), env, new FakeCtx());
     expect(cold.calls.map((c) => c.url)).toEqual([expect.stringContaining("/policy/"), `${BASE}/ask?q=x`]);
     expect(cold.originCalls).toHaveLength(0);
@@ -359,7 +361,7 @@ describe("proxied paths", () => {
   });
 
   it("passes through on a cold isolate when Dedica can't give a policy, body intact", async () => {
-    const { worker, state, originCalls } = harness({ policy: policy({ proxies: [MCP] }) });
+    const { worker, state, originCalls } = harness({ policy: policy({ content: content({ proxies: [MCP] }) }) });
     state.policyStatus = 503;
     const res = await worker.fetch(get("/mcp", { "content-type": "application/json" }, { method: "POST", body: '{"id":1}' }), env, new FakeCtx());
     expect(await res.text()).toBe("origin page");
@@ -367,14 +369,14 @@ describe("proxied paths", () => {
   });
 
   it("waits for the policy on a cold isolate for any path the policy proxies", async () => {
-    const { worker, calls, originCalls } = harness({ policy: policy({ proxies: [{ path: "/agents/search", targets: { GET: `${BASE}/search` } }] }) });
+    const { worker, calls, originCalls } = harness({ policy: policy({ content: content({ proxies: [{ path: "/agents/search", methods: { GET: `${BASE}/search` } }] }) }) });
     await worker.fetch(get("/agents/search?q=x"), env, new FakeCtx());
     expect(calls.map((c) => c.url)).toEqual([expect.stringContaining("/policy/"), `${BASE}/search?q=x`]);
     expect(originCalls).toHaveLength(0);
   });
 
   it("makes every request on a cold isolate wait for one shared policy fetch, then answers like a warm one", async () => {
-    const { worker, calls, originCalls } = harness({ policy: policy({ proxies: [MCP] }) });
+    const { worker, calls, originCalls } = harness({ policy: policy({ content: content({ proxies: [MCP] }) }) });
     const ctx = new FakeCtx();
     const results = await Promise.all([
       worker.fetch(get("/", browserHeaders), env, ctx),
@@ -388,8 +390,8 @@ describe("proxied paths", () => {
     expect(originCalls).toHaveLength(2);
   });
 
-  it("ignores malformed entries", async () => {
-    const bad = [{ path: "mcp", targets: { POST: `${BASE}/mcp` } }, { path: "/", targets: { POST: `${BASE}/mcp` } }, { path: "/x" }] as Proxy[];
+  it("passes everything through when an entry is malformed: the whole policy is rejected", async () => {
+    const bad = [{ path: "mcp", methods: { POST: `${BASE}/mcp` } }, { path: "/", methods: { POST: `${BASE}/mcp` } }, { path: "/x" }] as ProxyDoc[];
     const { worker, originCalls } = await warm(bad);
     await worker.fetch(post("/"), env, new FakeCtx());
     await worker.fetch(post("/mcp"), env, new FakeCtx());
@@ -489,12 +491,12 @@ describe("traffic reporting", () => {
       client: { kind: "bot", matched: "googlebot" },
     });
     const llms = await reported(get("/llms.txt", visitor()), {
-      policy: policy({ artifacts: [{ path: "/llms.txt", contentType: "text/plain", action: "proxy" }] }),
+      policy: policy({ content: content({ files: [{ path: "/llms.txt", contentType: "text/plain", action: "proxy", version: "" }] }) }),
       serve: () => new Response("# llms", { status: 200, headers: { "content-type": "text/plain" } }),
     });
     expect(llms.events[0]).toMatchObject({ outcome: "artifact", served_by_dedica: true });
     const mcp = await reported(get("/mcp", { "content-type": "application/json", "user-agent": "claude-user" }, { method: "POST", body: "{}" }), {
-      policy: policy({ proxies: [{ path: "/mcp", targets: { POST: `${API}/api/v1/middleware/query/mcp` } }] }),
+      policy: policy({ content: content({ proxies: [{ path: "/mcp", methods: { POST: `${API}/api/v1/middleware/query/mcp` } }] }) }),
     });
     expect(mcp.events[0]).toMatchObject({ method: "POST", path: "/mcp", outcome: "proxied", served_by_dedica: true });
     const missing = await reported(get("/nope", { "user-agent": GPTBOT_UA }), {

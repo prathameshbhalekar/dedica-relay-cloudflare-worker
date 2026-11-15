@@ -3,8 +3,7 @@
  * keys in the policy. Every failure is simply "not signed".
  */
 
-import type { SignatureAgent, Verification } from "../policy/types";
-import { fresh } from "./fresh";
+import type { Signer } from "../policy/compile";
 
 /** How far a signature's `created`/`expires` may be from our clock. */
 export const SIGNATURE_SKEW_S = 60;
@@ -122,30 +121,6 @@ export function signatureBase(params: SignatureParams, rawParams: string, reques
   return lines.join("\n");
 }
 
-function base64urlBytes(text: string): Uint8Array | null {
-  try {
-    const b64 = text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "=");
-    return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  } catch {
-    return null;
-  }
-}
-
-const importedKeys = new Map<string, Promise<CryptoKey | null>>();
-
-function importKey(x: string): Promise<CryptoKey | null> {
-  let key = importedKeys.get(x);
-  if (!key) {
-    const bytes = base64urlBytes(x);
-    key = bytes
-      ? crypto.subtle.importKey("raw", bytes, { name: "Ed25519" }, false, ["verify"]).catch(() => null)
-      : Promise.resolve(null);
-    if (importedKeys.size > 64) importedKeys.clear();
-    importedKeys.set(x, key);
-  }
-  return key;
-}
-
 /** The host of a `Signature-Agent` value (`"https://chatgpt.com"`), or null. */
 function hostOf(value: string): string | null {
   const raw = (value.split(";")[0] ?? "").trim();
@@ -173,10 +148,11 @@ function signingHost(header: string, params: SignatureParams, label: string): st
 }
 
 /**
- * The signing agent whose key verifies one of the request's signatures, or null. Every failure (missing or malformed
- * headers, unknown key, expired signature, bad signature, a WebCrypto without Ed25519) is simply "not signed".
+ * The signing agent whose key verifies one of the request's signatures, or null. `trusted` gives the signing agent
+ * for a host, or null when its keys are unknown or too old. Every failure (missing or malformed headers, unknown
+ * key, expired signature, bad signature, a WebCrypto without Ed25519) is simply "not signed".
  */
-export async function verifiedSigner(v: Verification, request: Request, now: number): Promise<SignatureAgent | null> {
+export async function verifiedSigner(trusted: (host: string) => Signer | null, request: Request, now: number): Promise<Signer | null> {
   const agentHeader = request.headers.get("signature-agent");
   const inputHeader = request.headers.get("signature-input");
   const signatureHeader = request.headers.get("signature");
@@ -195,13 +171,13 @@ export async function verifiedSigner(v: Verification, request: Request, now: num
     if (!params.components.some((c) => c.name === "@authority" && c.key === undefined)) continue;
     if (!params.components.some((c) => c.name === "signature-agent")) continue;
     const host = signingHost(agentHeader, params, label);
-    const signer = v.signatureAgents.find((s) => s.signatureAgent === host && fresh(s.fetchedAt, v, now));
+    const signer = host === null ? null : trusted(host);
     if (!signer) continue;
     const key = signer.keys.find((k) => k.kid === params.keyid && (k.nbf == null || k.nbf <= seconds) && (k.exp == null || k.exp > seconds));
     const signature = /^:([A-Za-z0-9+/=]*):$/.exec(signatures.get(label) ?? "")?.[1];
     if (!key || signature === undefined) continue;
     const base = signatureBase(params, rawParams, request, url);
-    const cryptoKey = base === null ? null : await importKey(key.x);
+    const cryptoKey = base === null ? null : await key.crypto();
     if (!cryptoKey || base === null) continue;
     const signatureBytes = Uint8Array.from(atob(signature), (c) => c.charCodeAt(0));
     const ok = await crypto.subtle

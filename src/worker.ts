@@ -85,7 +85,10 @@ export function createWorker(deps: WorkerDeps = {}) {
       ctx.waitUntil(
         rc
           .identity(policy)
-          .then((identity) => buildEvent(rc.facts.request, answer.response, answer, policy, rc.env, startedAt, now(), identity))
+          .then((identity) => {
+            const client = policy ? rc.client(policy) : null;
+            return buildEvent(rc.facts.request, answer.response, answer, policy, client, rc.env, startedAt, now(), identity);
+          })
           .then((event) => reporter.add(event, rc.env, ctx))
           .catch((error: unknown) => console.warn(`[dedica] event report skipped: ${error}`)),
       );

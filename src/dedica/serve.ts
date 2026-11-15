@@ -1,17 +1,16 @@
 /**
  * Serving from Dedica: fetch a document (`/llms.txt`, `/pricing.md`, the agent version of a page) and return it as
- * the site's response, or null and the origin answers. Dedica answers 200, 304 or 428 ("ask a question first");
- * anything else, including Dedica being slow or down, falls back to the origin.
+ * the site's response, or null and the origin answers. Dedica answers 200 or 304; anything else, including Dedica
+ * being slow or down, falls back to the origin.
  */
 
 import type { Env } from "../config";
-import type { Policy } from "../policy/types";
 import {
   CATEGORY_HEADER,
-  CONTENT_FALLBACK_HEADER,
   MAX_SERVED_BYTES,
   SERVED_HEADER,
   SERVE_BODY_DEADLINE_MS,
+  SCHEMA_MAJOR,
   SERVE_TIMEOUT_MS,
   VERSION_HEADER,
 } from "../protocol";
@@ -23,7 +22,8 @@ import type { DedicaClient } from "./client";
 export interface DocRequest {
   path: string;
   search?: string;
-  version?: string;
+  /** Sent as `X-Dedica-Version`, so a new version is a new cache entry at Dedica. */
+  version: string;
   /** `public`: same for everyone (`/llms.txt`, `/pricing.md`). `eligible`: agent version of a page URL. */
   category: "public" | "eligible";
   /** Used when Dedica sends no content type. */
@@ -35,8 +35,8 @@ export interface DocRequest {
 }
 
 /** The serve URL for a path on the customer's domain, or null when the path would climb out of the serve base. */
-export function serveTarget(serve: NonNullable<Policy["serve"]>, doc: Pick<DocRequest, "path" | "search" | "version">): { url: string; version: string } | null {
-  const base = new URL(serve.baseUrl.endsWith("/") ? serve.baseUrl : `${serve.baseUrl}/`);
+export function serveTarget(baseUrl: string, doc: Pick<DocRequest, "path" | "search">): string | null {
+  const base = new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
   const relative = doc.path.replace(/\/{2,}/g, "/").replace(/^\//, "");
   // Never let a path climb out of the serve base (it would reach other Dedica APIs with our token).
   const segments = relative.split("/").map((s) => {
@@ -50,7 +50,7 @@ export function serveTarget(serve: NonNullable<Policy["serve"]>, doc: Pick<DocRe
   const next = new URL(relative, base);
   if (next.origin !== base.origin || !next.pathname.startsWith(base.pathname)) return null;
   next.search = doc.search ?? "";
-  return { url: next.toString(), version: `v1:${doc.version || serve.version}` };
+  return next.toString();
 }
 
 export class Documents {
@@ -60,11 +60,10 @@ export class Documents {
   ) {}
 
   /** Dedica's document as the site's response, or null and the origin answers. Throws when the call fails. */
-  async get(doc: DocRequest, serve: Policy["serve"], env: Env, request: Request): Promise<Response | null> {
-    if (!serve) return null;
-    this.circuit.guard(serve.baseUrl);
+  async get(doc: DocRequest, baseUrl: string, env: Env, request: Request): Promise<Response | null> {
+    this.circuit.guard(baseUrl);
     if (this.circuit.open) return null;
-    const target = serveTarget(serve, doc);
+    const target = serveTarget(baseUrl, doc);
     if (!target) return null;
 
     const timeoutMs = doc.timeoutMs ?? SERVE_TIMEOUT_MS;
@@ -74,15 +73,10 @@ export class Documents {
       if (!circuit.aborted) this.circuit.trip();
       throw error;
     };
-    const headers = { ...requestHeaders(request, doc.shared), [VERSION_HEADER]: target.version, [CATEGORY_HEADER]: doc.category };
-    const upstream = await this.client.document(env, target.url, headers, timeoutMs, circuit).catch(fail);
+    const headers = { ...requestHeaders(request, doc.shared), [VERSION_HEADER]: `v${SCHEMA_MAJOR}:${doc.version}`, [CATEGORY_HEADER]: doc.category };
+    const upstream = await this.client.document(env, target, headers, timeoutMs, circuit).catch(fail);
 
-    // Dedica declines this one: the origin answers, and nothing is wrong (no backoff).
-    if (upstream.headers.get(CONTENT_FALLBACK_HEADER) === "origin") {
-      await upstream.body?.cancel().catch(() => {});
-      return null;
-    }
-    if (upstream.status !== 200 && upstream.status !== 428 && upstream.status !== 304) {
+    if (upstream.status !== 200 && upstream.status !== 304) {
       // 404: Dedica has nothing here (normal). Auth and server errors back off for a while.
       if (upstream.status === 401 || upstream.status === 403 || upstream.status >= 500) {
         this.circuit.trip();

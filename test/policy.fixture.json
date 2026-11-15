@@ -1,756 +1,929 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "ttlSeconds": 30,
-  "siteId": "00000000-0000-4000-8000-000000000001",
   "mode": "autopilot",
-  "detection": {
-    "traditionalBots": [
-      "adidxbot",
-      "adsbot-google",
-      "applebot",
-      "baiduspider",
-      "better uptime bot",
-      "betterstack",
-      "bingbot",
-      "bingpreview",
-      "chrome-lighthouse",
-      "datadogsynthetics",
-      "dedicabot",
-      "discordbot",
-      "duckduckbot",
-      "embedly",
-      "facebookcatalog",
-      "facebookexternalhit",
-      "google-inspectiontool",
-      "googlebot",
-      "gtmetrix",
-      "linkedinbot",
-      "mediapartners-google",
-      "naverbot",
-      "newrelic-synthetics",
-      "newrelicpinger",
-      "pingdom",
-      "pinterest/",
-      "pinterestbot",
-      "redditbot",
-      "seznambot",
-      "site24x7",
-      "skypeuripreview",
-      "slack-imgproxy",
-      "slackbot",
-      "statuscake",
-      "storebot-google",
-      "telegrambot",
-      "twitterbot",
-      "uptimerobot",
-      "whatsapp/",
-      "yahoo! slurp",
-      "yandex.com/bots",
-      "yandexbot",
-      "yeti/"
-    ],
-    "traditionalBotsExact": [],
-    "agentUa": [
-      "ai2bot",
-      "amazonbot",
-      "amzn-searchbot",
-      "amzn-user",
-      "anthropic-ai",
-      "applebot-extended",
-      "bytespider",
-      "ccbot",
-      "chatgpt agent",
-      "chatgpt-user",
-      "claude-searchbot",
-      "claude-user",
-      "claude-web",
-      "claudebot",
-      "cohere-ai",
-      "cohere-training-data-crawler",
-      "diffbot",
-      "duckassistbot",
-      "gemini-deep-research",
-      "google-agent",
-      "google-cloudvertexbot",
-      "google-extended",
-      "google-notebooklm",
-      "gptbot",
-      "meta-externalagent",
-      "meta-externalfetcher",
-      "meta-webindexer",
-      "mistralai-user",
-      "oai-searchbot",
-      "omgilibot",
-      "pangubot",
-      "perplexity-user",
-      "perplexitybot",
-      "timpibot",
-      "youbot"
-    ],
-    "agentUaExact": [],
-    "signatureAgentDomains": [
-      "chatgpt.com"
-    ],
-    "botLikePattern": "bot\\b|bot/|crawl|spider|scrap|fetcher|agent\\b|python-|python/|httpx|aiohttp|axios|node-fetch|undici|go-http-client|okhttp|java/|libwww|headless|phantomjs|playwright|puppeteer",
-    "humanPageVeto": {
-      "exact": [],
-      "contains": [
-        [
-          "cohere-training-data-crawler",
-          "agent"
-        ],
-        [
-          "google-cloudvertexbot",
-          "agent"
-        ],
-        [
-          "google-inspectiontool",
-          "human"
-        ],
-        [
-          "gemini-deep-research",
-          "agent"
-        ],
-        [
-          "mediapartners-google",
-          "human"
-        ],
-        [
-          "meta-externalfetcher",
-          "agent"
-        ],
-        [
-          "facebookexternalhit",
-          "human"
-        ],
-        [
-          "newrelic-synthetics",
-          "human"
-        ],
-        [
-          "meta-externalagent",
-          "agent"
-        ],
-        [
-          "applebot-extended",
-          "agent"
-        ],
-        [
-          "better uptime bot",
-          "human"
-        ],
-        [
-          "chrome-lighthouse",
-          "human"
-        ],
-        [
-          "datadogsynthetics",
-          "human"
-        ],
-        [
-          "google-notebooklm",
-          "agent"
-        ],
-        [
-          "claude-searchbot",
-          "agent"
-        ],
-        [
-          "facebookcatalog",
-          "human"
-        ],
-        [
-          "google-extended",
-          "agent"
-        ],
-        [
-          "meta-webindexer",
-          "agent"
-        ],
-        [
-          "perplexity-user",
-          "agent"
-        ],
-        [
-          "skypeuripreview",
-          "human"
-        ],
-        [
-          "storebot-google",
-          "human"
-        ],
-        [
-          "yandex.com/bots",
-          "human"
-        ],
-        [
-          "amzn-searchbot",
-          "agent"
-        ],
-        [
-          "mistralai-user",
-          "agent"
-        ],
-        [
-          "newrelicpinger",
-          "human"
-        ],
-        [
-          "slack-imgproxy",
-          "human"
-        ],
-        [
-          "adsbot-google",
-          "human"
-        ],
-        [
-          "chatgpt agent",
-          "agent"
-        ],
-        [
-          "duckassistbot",
-          "agent"
-        ],
-        [
-          "oai-searchbot",
-          "agent"
-        ],
-        [
-          "perplexitybot",
-          "agent"
-        ],
-        [
-          "anthropic-ai",
-          "agent"
-        ],
-        [
-          "chatgpt-user",
-          "agent"
-        ],
-        [
-          "google-agent",
-          "agent"
-        ],
-        [
-          "pinterestbot",
-          "human"
-        ],
-        [
-          "yahoo! slurp",
-          "human"
-        ],
-        [
-          "baiduspider",
-          "human"
-        ],
-        [
-          "betterstack",
-          "human"
-        ],
-        [
-          "bingpreview",
-          "human"
-        ],
-        [
-          "claude-user",
-          "agent"
-        ],
-        [
-          "duckduckbot",
-          "human"
-        ],
-        [
-          "linkedinbot",
-          "human"
-        ],
-        [
-          "telegrambot",
-          "human"
-        ],
-        [
-          "uptimerobot",
-          "human"
-        ],
-        [
-          "bytespider",
-          "agent"
-        ],
-        [
-          "claude-web",
-          "agent"
-        ],
-        [
-          "discordbot",
-          "human"
-        ],
-        [
-          "pinterest/",
-          "human"
-        ],
-        [
-          "statuscake",
-          "human"
-        ],
-        [
-          "twitterbot",
-          "human"
-        ],
-        [
-          "amazonbot",
-          "agent"
-        ],
-        [
-          "amzn-user",
-          "agent"
-        ],
-        [
-          "claudebot",
-          "agent"
-        ],
-        [
-          "cohere-ai",
-          "agent"
-        ],
-        [
-          "dedicabot",
-          "agent"
-        ],
-        [
-          "googlebot",
-          "human"
-        ],
-        [
-          "omgilibot",
-          "agent"
-        ],
-        [
-          "redditbot",
-          "human"
-        ],
-        [
-          "seznambot",
-          "human"
-        ],
-        [
-          "whatsapp/",
-          "human"
-        ],
-        [
-          "yandexbot",
-          "human"
-        ],
-        [
-          "adidxbot",
-          "human"
-        ],
-        [
-          "applebot",
-          "human"
-        ],
-        [
-          "gtmetrix",
-          "human"
-        ],
-        [
-          "naverbot",
-          "human"
-        ],
-        [
-          "pangubot",
-          "agent"
-        ],
-        [
-          "site24x7",
-          "human"
-        ],
-        [
-          "slackbot",
-          "human"
-        ],
-        [
-          "timpibot",
-          "agent"
-        ],
-        [
-          "bingbot",
-          "human"
-        ],
-        [
-          "diffbot",
-          "agent"
-        ],
-        [
-          "embedly",
-          "human"
-        ],
-        [
-          "pingdom",
-          "human"
-        ],
-        [
-          "ai2bot",
-          "agent"
-        ],
-        [
-          "gptbot",
-          "agent"
-        ],
-        [
-          "youbot",
-          "agent"
-        ],
-        [
-          "ccbot",
-          "agent"
-        ],
-        [
-          "yeti/",
-          "human"
-        ]
+  "agents": [
+    {
+      "key": "gptbot",
+      "kind": "ai",
+      "ua": [
+        "gptbot"
       ],
-      "botLikePattern": "bot\\b|bot/|crawl|spider|slurp"
+      "uaExact": [],
+      "page": "agent",
+      "ipSets": [
+        "openai-gptbot"
+      ]
+    },
+    {
+      "key": "chatgpt-user",
+      "kind": "ai",
+      "ua": [
+        "chatgpt-user"
+      ],
+      "uaExact": [],
+      "page": "agent",
+      "ipSets": [
+        "openai-chatgpt-user"
+      ],
+      "signer": "chatgpt.com"
+    },
+    {
+      "key": "chatgpt-agent",
+      "kind": "ai",
+      "ua": [
+        "chatgpt agent"
+      ],
+      "uaExact": [],
+      "page": "agent",
+      "signer": "chatgpt.com"
+    },
+    {
+      "key": "oai-searchbot",
+      "kind": "ai",
+      "ua": [
+        "oai-searchbot"
+      ],
+      "uaExact": [],
+      "page": "agent",
+      "ipSets": [
+        "openai-searchbot"
+      ]
+    },
+    {
+      "key": "claudebot",
+      "kind": "ai",
+      "ua": [
+        "claudebot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "claude-user",
+      "kind": "ai",
+      "ua": [
+        "claude-user"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "claude-searchbot",
+      "kind": "ai",
+      "ua": [
+        "claude-searchbot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "claude-web",
+      "kind": "ai",
+      "ua": [
+        "claude-web"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "anthropic-ai",
+      "kind": "ai",
+      "ua": [
+        "anthropic-ai"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "perplexitybot",
+      "kind": "ai",
+      "ua": [
+        "perplexitybot"
+      ],
+      "uaExact": [],
+      "page": "agent",
+      "ipSets": [
+        "perplexity-bot"
+      ]
+    },
+    {
+      "key": "perplexity-user",
+      "kind": "ai",
+      "ua": [
+        "perplexity-user"
+      ],
+      "uaExact": [],
+      "page": "agent",
+      "ipSets": [
+        "perplexity-user"
+      ]
+    },
+    {
+      "key": "google-extended",
+      "kind": "ai",
+      "ua": [
+        "google-extended"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "google-cloudvertexbot",
+      "kind": "ai",
+      "ua": [
+        "google-cloudvertexbot"
+      ],
+      "uaExact": [],
+      "page": "agent",
+      "ipSets": [
+        "google-common",
+        "google-special",
+        "google-user-triggered",
+        "google-user-triggered-google"
+      ]
+    },
+    {
+      "key": "google-agent",
+      "kind": "ai",
+      "ua": [
+        "google-agent"
+      ],
+      "uaExact": [],
+      "page": "agent",
+      "ipSets": [
+        "google-common",
+        "google-special",
+        "google-user-triggered",
+        "google-user-triggered-google"
+      ]
+    },
+    {
+      "key": "gemini-deep-research",
+      "kind": "ai",
+      "ua": [
+        "gemini-deep-research"
+      ],
+      "uaExact": [],
+      "page": "agent",
+      "ipSets": [
+        "google-common",
+        "google-special",
+        "google-user-triggered",
+        "google-user-triggered-google"
+      ]
+    },
+    {
+      "key": "google-notebooklm",
+      "kind": "ai",
+      "ua": [
+        "google-notebooklm"
+      ],
+      "uaExact": [],
+      "page": "agent",
+      "ipSets": [
+        "google-common",
+        "google-special",
+        "google-user-triggered",
+        "google-user-triggered-google"
+      ]
+    },
+    {
+      "key": "applebot-extended",
+      "kind": "ai",
+      "ua": [
+        "applebot-extended"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "meta-externalagent",
+      "kind": "ai",
+      "ua": [
+        "meta-externalagent"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "meta-webindexer",
+      "kind": "ai",
+      "ua": [
+        "meta-webindexer"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "meta-externalfetcher",
+      "kind": "ai",
+      "ua": [
+        "meta-externalfetcher"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "amazonbot",
+      "kind": "ai",
+      "ua": [
+        "amazonbot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "amzn-searchbot",
+      "kind": "ai",
+      "ua": [
+        "amzn-searchbot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "amzn-user",
+      "kind": "ai",
+      "ua": [
+        "amzn-user"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "bytespider",
+      "kind": "ai",
+      "ua": [
+        "bytespider"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "ccbot",
+      "kind": "ai",
+      "ua": [
+        "ccbot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "ai2bot",
+      "kind": "ai",
+      "ua": [
+        "ai2bot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "cohere-ai",
+      "kind": "ai",
+      "ua": [
+        "cohere-ai"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "cohere-training-data-crawler",
+      "kind": "ai",
+      "ua": [
+        "cohere-training-data-crawler"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "diffbot",
+      "kind": "ai",
+      "ua": [
+        "diffbot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "pangubot",
+      "kind": "ai",
+      "ua": [
+        "pangubot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "timpibot",
+      "kind": "ai",
+      "ua": [
+        "timpibot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "omgilibot",
+      "kind": "ai",
+      "ua": [
+        "omgilibot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "mistralai-user",
+      "kind": "ai",
+      "ua": [
+        "mistralai-user"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "youbot",
+      "kind": "ai",
+      "ua": [
+        "youbot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "duckassistbot",
+      "kind": "ai",
+      "ua": [
+        "duckassistbot"
+      ],
+      "uaExact": [],
+      "page": "agent",
+      "ipSets": [
+        "duckduckgo-duckassistbot"
+      ]
+    },
+    {
+      "key": "googlebot",
+      "kind": "search",
+      "ua": [
+        "adsbot-google",
+        "google-inspectiontool",
+        "googlebot",
+        "mediapartners-google",
+        "storebot-google"
+      ],
+      "uaExact": [],
+      "page": "human",
+      "ipSets": [
+        "google-common",
+        "google-special",
+        "google-user-triggered",
+        "google-user-triggered-google"
+      ]
+    },
+    {
+      "key": "bingbot",
+      "kind": "search",
+      "ua": [
+        "adidxbot",
+        "bingbot",
+        "bingpreview"
+      ],
+      "uaExact": [],
+      "page": "human",
+      "ipSets": [
+        "bing-bingbot"
+      ]
+    },
+    {
+      "key": "applebot",
+      "kind": "search",
+      "ua": [
+        "applebot"
+      ],
+      "uaExact": [],
+      "page": "human",
+      "ipSets": [
+        "apple-applebot"
+      ]
+    },
+    {
+      "key": "duckduckbot",
+      "kind": "search",
+      "ua": [
+        "duckduckbot"
+      ],
+      "uaExact": [],
+      "page": "human",
+      "ipSets": [
+        "duckduckgo-duckduckbot"
+      ]
+    },
+    {
+      "key": "yandexbot",
+      "kind": "search",
+      "ua": [
+        "yandex.com/bots",
+        "yandexbot"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "baiduspider",
+      "kind": "search",
+      "ua": [
+        "baiduspider"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "slurp",
+      "kind": "search",
+      "ua": [
+        "yahoo! slurp"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "naverbot",
+      "kind": "search",
+      "ua": [
+        "naverbot",
+        "yeti/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "seznambot",
+      "kind": "search",
+      "ua": [
+        "seznambot"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "facebookexternalhit",
+      "kind": "search",
+      "ua": [
+        "facebookcatalog",
+        "facebookexternalhit"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "twitterbot",
+      "kind": "search",
+      "ua": [
+        "twitterbot"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "linkedinbot",
+      "kind": "search",
+      "ua": [
+        "linkedinbot"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "slackbot",
+      "kind": "search",
+      "ua": [
+        "slack-imgproxy",
+        "slackbot"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "discordbot",
+      "kind": "search",
+      "ua": [
+        "discordbot"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "telegrambot",
+      "kind": "search",
+      "ua": [
+        "telegrambot"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "whatsapp",
+      "kind": "search",
+      "ua": [
+        "whatsapp/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "pinterestbot",
+      "kind": "search",
+      "ua": [
+        "pinterest/",
+        "pinterestbot"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "redditbot",
+      "kind": "search",
+      "ua": [
+        "redditbot"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "embedly",
+      "kind": "search",
+      "ua": [
+        "embedly"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "skypeuripreview",
+      "kind": "search",
+      "ua": [
+        "skypeuripreview"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "uptimerobot",
+      "kind": "search",
+      "ua": [
+        "uptimerobot"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "pingdom",
+      "kind": "search",
+      "ua": [
+        "pingdom"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "statuscake",
+      "kind": "search",
+      "ua": [
+        "statuscake"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "betteruptime",
+      "kind": "search",
+      "ua": [
+        "better uptime bot",
+        "betterstack"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "datadog-synthetics",
+      "kind": "search",
+      "ua": [
+        "datadogsynthetics"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "site24x7",
+      "kind": "search",
+      "ua": [
+        "site24x7"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "newrelic-synthetics",
+      "kind": "search",
+      "ua": [
+        "newrelic-synthetics",
+        "newrelicpinger"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "lighthouse",
+      "kind": "search",
+      "ua": [
+        "chrome-lighthouse"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "gtmetrix",
+      "kind": "search",
+      "ua": [
+        "gtmetrix"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "dedicabot",
+      "kind": "search",
+      "ua": [
+        "dedicabot"
+      ],
+      "uaExact": [],
+      "page": "agent"
+    },
+    {
+      "key": "dedica-gateway",
+      "kind": "tool",
+      "ua": [
+        "dedicaagentgateway"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "curl",
+      "kind": "tool",
+      "ua": [
+        "curl/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "wget",
+      "kind": "tool",
+      "ua": [
+        "wget/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "httpie",
+      "kind": "tool",
+      "ua": [
+        "httpie/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "postman",
+      "kind": "tool",
+      "ua": [
+        "postmanruntime/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "insomnia",
+      "kind": "tool",
+      "ua": [
+        "insomnia/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "powershell",
+      "kind": "tool",
+      "ua": [
+        "powershell/",
+        "windowspowershell"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "python-requests",
+      "kind": "tool",
+      "ua": [
+        "python-requests/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "python-httpx",
+      "kind": "tool",
+      "ua": [
+        "python-httpx/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "aiohttp",
+      "kind": "tool",
+      "ua": [
+        "aiohttp/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "python-urllib",
+      "kind": "tool",
+      "ua": [
+        "python-urllib/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "node-http-client",
+      "kind": "tool",
+      "ua": [
+        "node-fetch",
+        "undici"
+      ],
+      "uaExact": [
+        "node"
+      ],
+      "page": "human"
+    },
+    {
+      "key": "axios",
+      "kind": "tool",
+      "ua": [
+        "axios/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "go-http-client",
+      "kind": "tool",
+      "ua": [
+        "go-http-client/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "okhttp",
+      "kind": "tool",
+      "ua": [
+        "okhttp/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "java-http-client",
+      "kind": "tool",
+      "ua": [
+        "apache-httpclient/",
+        "java-http-client/",
+        "java/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "libwww-perl",
+      "kind": "tool",
+      "ua": [
+        "libwww-perl/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "headless-browser",
+      "kind": "tool",
+      "ua": [
+        "headlesschrome",
+        "phantomjs"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "bun",
+      "kind": "tool",
+      "ua": [
+        "bun/"
+      ],
+      "uaExact": [],
+      "page": "human"
+    },
+    {
+      "key": "deno",
+      "kind": "tool",
+      "ua": [
+        "deno/"
+      ],
+      "uaExact": [],
+      "page": "human"
     }
+  ],
+  "patterns": {
+    "botLike": "bot\\b|bot/|crawl|spider|scrap|fetcher|agent\\b|python-|python/|httpx|aiohttp|axios|node-fetch|undici|go-http-client|okhttp|java/|libwww|headless|phantomjs|playwright|puppeteer",
+    "crawler": "bot\\b|bot/|crawl|spider|slurp"
   },
-  "twins": {
-    "enabled": true,
+  "content": {
+    "serveBaseUrl": "https://api.dedica.test/api/v1/middleware/serve/",
     "negotiate": true,
-    "suffix": ".md",
-    "includePaths": [],
     "excludePaths": [],
-    "questionParams": []
+    "files": [
+      {
+        "path": "/robots.txt",
+        "action": "proxy",
+        "contentType": "text/plain; charset=utf-8",
+        "version": "b3cabba10da4b4e3"
+      },
+      {
+        "path": "/openapi.json",
+        "action": "fallback",
+        "contentType": "application/json",
+        "version": "f1"
+      }
+    ],
+    "proxies": [
+      {
+        "path": "/mcp",
+        "methods": {
+          "POST": "https://api.dedica.test/api/v1/middleware/query/mcp"
+        }
+      }
+    ]
   },
-  "artifacts": [],
-  "serve": {
-    "baseUrl": "https://api.dedica.test/api/v1/middleware/serve/",
-    "version": "61c9d38e313cda3f"
-  },
-  "proxies": [],
   "access": {
-    "enforce": false,
     "impersonators": "flag",
-    "blockedAgentUa": [],
-    "blockedAgentUaExact": [],
-    "blockedServeHumanUa": [],
-    "blockedServeHumanUaExact": [],
-    "blockedAgentKeys": [],
-    "routes": [],
-    "verification": {
-      "maxAgeSeconds": 604800,
-      "claims": [
-        [
-          "cohere-training-data-crawler",
-          "cohere-training-data-crawler"
-        ],
-        [
-          "google-cloudvertexbot",
-          "google-cloudvertexbot"
-        ],
-        [
-          "google-inspectiontool",
-          "googlebot"
-        ],
-        [
-          "gemini-deep-research",
-          "gemini-deep-research"
-        ],
-        [
-          "mediapartners-google",
-          "googlebot"
-        ],
-        [
-          "meta-externalfetcher",
-          "meta-externalfetcher"
-        ],
-        [
-          "facebookexternalhit",
-          "facebookexternalhit"
-        ],
-        [
-          "newrelic-synthetics",
-          "newrelic-synthetics"
-        ],
-        [
-          "meta-externalagent",
-          "meta-externalagent"
-        ],
-        [
-          "applebot-extended",
-          "applebot-extended"
-        ],
-        [
-          "better uptime bot",
-          "betteruptime"
-        ],
-        [
-          "chrome-lighthouse",
-          "lighthouse"
-        ],
-        [
-          "datadogsynthetics",
-          "datadog-synthetics"
-        ],
-        [
-          "google-notebooklm",
-          "google-notebooklm"
-        ],
-        [
-          "claude-searchbot",
-          "claude-searchbot"
-        ],
-        [
-          "facebookcatalog",
-          "facebookexternalhit"
-        ],
-        [
-          "google-extended",
-          "google-extended"
-        ],
-        [
-          "meta-webindexer",
-          "meta-webindexer"
-        ],
-        [
-          "perplexity-user",
-          "perplexity-user"
-        ],
-        [
-          "skypeuripreview",
-          "skypeuripreview"
-        ],
-        [
-          "storebot-google",
-          "googlebot"
-        ],
-        [
-          "yandex.com/bots",
-          "yandexbot"
-        ],
-        [
-          "amzn-searchbot",
-          "amzn-searchbot"
-        ],
-        [
-          "mistralai-user",
-          "mistralai-user"
-        ],
-        [
-          "newrelicpinger",
-          "newrelic-synthetics"
-        ],
-        [
-          "slack-imgproxy",
-          "slackbot"
-        ],
-        [
-          "adsbot-google",
-          "googlebot"
-        ],
-        [
-          "chatgpt agent",
-          "chatgpt-agent"
-        ],
-        [
-          "duckassistbot",
-          "duckassistbot"
-        ],
-        [
-          "oai-searchbot",
-          "oai-searchbot"
-        ],
-        [
-          "perplexitybot",
-          "perplexitybot"
-        ],
-        [
-          "anthropic-ai",
-          "anthropic-ai"
-        ],
-        [
-          "chatgpt-user",
-          "chatgpt-user"
-        ],
-        [
-          "google-agent",
-          "google-agent"
-        ],
-        [
-          "pinterestbot",
-          "pinterestbot"
-        ],
-        [
-          "yahoo! slurp",
-          "slurp"
-        ],
-        [
-          "baiduspider",
-          "baiduspider"
-        ],
-        [
-          "betterstack",
-          "betteruptime"
-        ],
-        [
-          "bingpreview",
-          "bingbot"
-        ],
-        [
-          "claude-user",
-          "claude-user"
-        ],
-        [
-          "duckduckbot",
-          "duckduckbot"
-        ],
-        [
-          "linkedinbot",
-          "linkedinbot"
-        ],
-        [
-          "telegrambot",
-          "telegrambot"
-        ],
-        [
-          "uptimerobot",
-          "uptimerobot"
-        ],
-        [
-          "bytespider",
-          "bytespider"
-        ],
-        [
-          "claude-web",
-          "claude-web"
-        ],
-        [
-          "discordbot",
-          "discordbot"
-        ],
-        [
-          "pinterest/",
-          "pinterestbot"
-        ],
-        [
-          "statuscake",
-          "statuscake"
-        ],
-        [
-          "twitterbot",
-          "twitterbot"
-        ],
-        [
-          "amazonbot",
-          "amazonbot"
-        ],
-        [
-          "amzn-user",
-          "amzn-user"
-        ],
-        [
-          "claudebot",
-          "claudebot"
-        ],
-        [
-          "cohere-ai",
-          "cohere-ai"
-        ],
-        [
-          "googlebot",
-          "googlebot"
-        ],
-        [
-          "omgilibot",
-          "omgilibot"
-        ],
-        [
-          "redditbot",
-          "redditbot"
-        ],
-        [
-          "seznambot",
-          "seznambot"
-        ],
-        [
-          "whatsapp/",
-          "whatsapp"
-        ],
-        [
-          "yandexbot",
-          "yandexbot"
-        ],
-        [
-          "adidxbot",
-          "bingbot"
-        ],
-        [
-          "applebot",
-          "applebot"
-        ],
-        [
-          "gtmetrix",
-          "gtmetrix"
-        ],
-        [
-          "naverbot",
-          "naverbot"
-        ],
-        [
-          "pangubot",
-          "pangubot"
-        ],
-        [
-          "site24x7",
-          "site24x7"
-        ],
-        [
-          "slackbot",
-          "slackbot"
-        ],
-        [
-          "timpibot",
-          "timpibot"
-        ],
-        [
-          "bingbot",
-          "bingbot"
-        ],
-        [
-          "diffbot",
-          "diffbot"
-        ],
-        [
-          "embedly",
-          "embedly"
-        ],
-        [
-          "pingdom",
-          "pingdom"
-        ],
-        [
-          "ai2bot",
-          "ai2bot"
-        ],
-        [
-          "gptbot",
-          "gptbot"
-        ],
-        [
-          "youbot",
-          "youbot"
-        ],
-        [
-          "ccbot",
-          "ccbot"
-        ],
-        [
-          "yeti/",
-          "naverbot"
-        ]
-      ],
-      "claimsExact": [],
-      "agentIpSets": {},
-      "ipSets": {},
-      "signatureAgents": []
-    }
+    "blocked": [
+      "googlebot",
+      "gptbot"
+    ],
+    "routes": [
+      {
+        "id": "r-private",
+        "kind": "prefix",
+        "path": "/private",
+        "action": "block"
+      },
+      {
+        "id": "r-legacy",
+        "kind": "exact",
+        "path": "/legacy",
+        "action": "passthrough"
+      }
+    ]
   },
-  "version": "61c9d38e313cda3f"
+  "verification": {
+    "maxAgeSeconds": 604800,
+    "ipSets": {
+      "openai-gptbot": {
+        "cidrs": [
+          "20.171.207.0/24"
+        ],
+        "fetchedAt": "2026-11-01T00:00:00+00:00"
+      }
+    },
+    "signers": [
+      {
+        "host": "chatgpt.com",
+        "fetchedAt": "2026-11-01T00:00:00+00:00",
+        "keys": [
+          {
+            "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "exp": null,
+            "kid": "k1",
+            "nbf": null
+          }
+        ]
+      }
+    ]
+  },
+  "version": "ce7f8ee07b1335ed"
 }

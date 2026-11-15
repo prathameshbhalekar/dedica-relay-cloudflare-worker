@@ -8,7 +8,7 @@ export type Outcome =
   | "proxied" // a path the policy proxies to Dedica (`/mcp`, `/ask`, ...)
   | "artifact" // a file Dedica manages (`/llms.txt`, ...), from Dedica
   | "artifact_origin" // a `fallback` file the origin has itself
-  | "blocked" // a file the policy blocks, or a bot the site's Agent Access rules block
+  | "blocked" // a bot the site's Agent Access rules block
   | "twin" // an explicit markdown URL (`/pricing.md`)
   | "negotiated" // the agent version of a normal page URL
   | "human_page" // a search engine, preview or unknown crawler kept the normal page
@@ -20,8 +20,8 @@ export type Category = "public" | "eligible" | null;
 export type Decision =
   /** The origin answers. `report: false` for Dedica's own crawler, which is never reported. */
   | { do: "origin"; outcome: "origin" | "human_page"; report?: false }
-  /** An Agent Access 403 (`rule`), or an artifact the policy blocks for everyone (`file`). JSON on proxied paths. */
-  | { do: "block"; rule: BlockRule | "file"; json: boolean }
+  /** An Agent Access 403. JSON on proxied paths. */
+  | { do: "block"; rule: BlockRule; json: boolean }
   /** Dedica's document; if Dedica has none, the origin answers. */
   | { do: "serve"; doc: DocRequest; outcome: "artifact" | "twin" | "negotiated" }
   /** A `fallback` artifact: the origin's own file if it has one, else Dedica's, else the origin's answer. */
