@@ -1,6 +1,6 @@
 # Dedica middleware: Cloudflare Worker (reference implementation)
 
-One implementation of the [Dedica middleware protocol v1](../README.md). Use it if your site is on
+One implementation of the [Dedica middleware protocol v2](../README.md). Use it if your site is on
 Cloudflare; otherwise implement the protocol in your own stack. Dedica treats every middleware the same.
 
 What it does:
@@ -27,23 +27,25 @@ has a timeout; anything unexpected (Dedica slow, down, no content for a path) fa
   alone for 15 s, during which nothing waits; while Dedica stays down, one such wait can recur every 15 s. Once a
   policy is loaded it is refreshed in the background and nothing waits.
 - Dedica can hand any request back to your origin (`x-dedica-content-fallback: origin`).
-- A malformed policy only ever serves less: empty or invalid entries are dropped, the cache TTL is kept to
-  5–300 s, and a policy without a usable mode or detection settings serves nothing.
+- A malformed policy changes nothing: a policy that fails the worker's check (`src/policy/schema.ts`, SPEC.md 3.2.4)
+  is ignored whole, and your origin answers everything. The cache TTL is kept to 5–300 s. In `report` mode nothing is
+  served or blocked, whatever the policy says.
 - **Kill switch:** set the variable `DEDICA_DISABLED=1` and the worker passes every request straight to your
   origin, untouched and unreported, with no calls to Dedica. `/__dedica/status` shows `"disabled": true`.
 
-## Agent Access (1.4.0)
+## Agent Access
 
-When the policy carries an `access` section (protocol section 5a), the worker:
+The policy names every known client once, in its `agents` catalog (key, kind, user-agent needles, IP sets, signing
+host). With that, the worker:
 
-- **verifies who a bot is**, in every mode (`src/identity.ts`): a user agent naming a bot is checked against the IP
+- **verifies who a bot is**, in every mode, when the policy carries `verification` (`src/identity/`): a user agent naming a bot is checked against the IP
   ranges its vendor publishes, and a Web Bot Auth signature (RFC 9421, Ed25519) against the signing agent's keys. Each
   event reports `verified`, `claimed`, `impersonator` or `unknown` and the agent it names. The client IP is used only
   in memory and is never reported. Ranges older than the policy's `maxAgeSeconds` prove nothing (`claimed`);
-- **blocks** the bots the site blocks, in `autopilot` and only while the policy says the rules are enforced
-  (`src/access.ts`): impersonators (if the site blocks them), search engines and previews blocked by name, then AI
+- **blocks** the agents the site blocks (`access.blocked`, by key), in `autopilot` and only while the policy carries
+  `access` (`src/decide/access.ts`): impersonators (if the site blocks them), search engines and previews blocked by name, then AI
   agents and tools by user agent (never a search engine, never a browser navigation), then agents proven by a
-  signature. Each gets `403 Not available to this client.`, reported with `block_rule`. Artifacts are answered first,
+  signature. Each gets `403 Not available to this client.`, reported with `block_rule`. Files are answered first,
   so a blocked crawler can still read robots.txt. The same rules run on the paths proxied to Dedica (`/ask`, `/mcp`),
   where a blocked bot gets a JSON `403` (`QUERY_FORBIDDEN`) and nothing is sent to Dedica. Nothing is exempt by user
   agent or header: `X-Dedica-Origin-Fetch` only keeps Dedica's content away from the crawler, and a blocked bot sending
@@ -54,9 +56,7 @@ When the policy carries an `access` section (protocol section 5a), the worker:
 - **verifies signatures strictly**: `tag="web-bot-auth"`, both `created` and `expires`, and coverage of `@authority`
   and `signature-agent` are required, so a signature can't be replayed on another site or forever;
 - robots.txt needs nothing new: Dedica serves the whole file (your own rules, then the groups for blocked bots) as an
-  ordinary `proxy` artifact, and your origin's file answers whenever Dedica has none.
-
-Older policies (no `access`) block nothing and add no verdicts, and a malformed `access` section can only block less.
+  ordinary `proxy` file, and your origin's file answers whenever Dedica has none.
 
 ## Traffic reporting
 
@@ -70,8 +70,7 @@ events). Reporting never delays or changes a response.
 
 What's in an event: time, method, host, path, status, latency, what the worker did (`outcome`), whether Dedica served
 it, the recognised agent, the user agent, the referer's origin and path, the country, a few request headers
-(`accept`, `accept-language`, `sec-fetch-*`) and only the attribution query parameters (`utm_*`, `ref`, `source`) plus
-the questions your policy declares. **Never** an IP address, cookies, the full query string or the token: a visitor is
+(`accept`, `accept-language`, `sec-fetch-*`) and only the attribution query parameters (`utm_*`, `ref`, `source`). **Never** an IP address, cookies, the full query string or the token: a visitor is
 a daily pseudonym (SHA-256 of IP, user agent, day and a secret salt). Set the salt (any long random string) with
 `npx wrangler secret put DEDICA_SALT`; without it no visitor pseudonym is sent at all.
 
@@ -136,7 +135,21 @@ echo 'DEDICA_MIDDLEWARE_TOKEN=dm_...' > .dev.vars
 npx wrangler dev --var DEDICA_SITE_ID:<site id> --var DEDICA_API_URL:http://localhost:8000
 ```
 
-`src/`: `index.ts` (entry: default handler only), `edge.ts` (request order, heartbeat), `policy.ts` (cache and backoff), `detect.ts` (agent
-detection), `serve.ts` (serving from Dedica), `proxy.ts` (paths proxied to Dedica: `/ask`, `/mcp`), `analytics.ts` (traffic reporting), `body.ts` (capped body reads),
-`env.ts` (constants and Dedica call helpers), `types.ts`.
-`test/policy.fixture.json` is a real policy from the backend (the backend tests check it still matches).
+How it fits together (SPEC.md describes the behaviour; each step there is named as in `decide/decide.ts`):
+
+```
+request -> worker.ts      built-in endpoints (status, kill switch, well-known), then for everything else:
+        -> policy/        store.ts (cache, back-off) -> schema.ts (strict check) -> compile.ts (indexes, once)
+        -> request/       facts.ts (what the request is) + classify.ts (who the client looks like, once)
+        -> decide/        decide.ts: the ordered steps -> a Decision, with no network calls
+                          access.ts: Agent Access rules (identity/ works out who a bot really is, lazily)
+        -> execute.ts     carries the decision out: dedica/ (serve, proxy, circuit breaker) or the origin
+        -> report/        event.ts + reporter.ts (batched in the background)
+```
+
+`dedica/client.ts` is the only code that builds requests to Dedica. `protocol.ts` holds the names, time limits and
+size limits; `config.ts` the variables. There are no runtime dependencies.
+
+`test/policy.fixture.json` is the backend's real policy, with something in every section: refresh it with
+`npm run sync-fixture` after regenerating it in the backend (its test checks it still matches what Dedica builds).
+`test/decide.test.ts` pins the order of SPEC section 6, one row per step.
