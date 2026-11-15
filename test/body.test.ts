@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readCapped } from "../src/body";
+import { readCapped } from "../src/util/stream";
 
 function stream(chunks: string[], { stall = false } = {}): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();

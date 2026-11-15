@@ -1,26 +1,4 @@
-/** Worker configuration. Set the vars in wrangler.toml and the token with `wrangler secret put`. */
-export interface Env {
-  /** Your site's id from Dedica. Not a secret. Without it the worker only passes traffic through. */
-  DEDICA_SITE_ID?: string;
-  /** Dedica's API, e.g. https://api.getdedica.com */
-  DEDICA_API_URL?: string;
-  /** Secret: the middleware token from Dedica onboarding. */
-  DEDICA_MIDDLEWARE_TOKEN?: string;
-  /** Optional override of the policy URL (testing). */
-  DEDICA_POLICY_URL?: string;
-  /** Optional pin: the only origin /ask and /mcp may be proxied to. Defaults to DEDICA_API_URL's origin. */
-  DEDICA_QUERY_ORIGIN?: string;
-  /** Optional secret: salt for the daily visitor pseudonym in traffic reports. Without it, no pseudonym is sent. */
-  DEDICA_SALT?: string;
-  /** Optional kill switch: `1` and the worker passes every request straight to the origin, untouched and unreported. */
-  DEDICA_DISABLED?: string;
-}
-
-/** Minimal slice of ExecutionContext the worker uses (lets tests pass a plain object). */
-export interface Ctx {
-  waitUntil(promise: Promise<unknown>): void;
-  passThroughOnException?(): void;
-}
+/** The site's policy, in the exact shape the worker relies on once it has been checked (see sanitize.ts). */
 
 export type PagePreference = "human" | "agent" | "question";
 

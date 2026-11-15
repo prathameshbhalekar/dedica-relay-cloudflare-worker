@@ -18,22 +18,16 @@
  * The same rules guard the paths proxied to Dedica (`/ask`, `/mcp`), where a blocked bot gets a JSON 403.
  */
 
-import { detectAgent, isBrowserNavigation, isTraditionalBot } from "./detect";
-import type { Identity } from "./identity";
-import type { Policy, RouteRule } from "./types";
+import type { Identity } from "../identity/verdict";
+import type { Policy, RouteRule } from "../policy/types";
+import { detectAgent, isTraditionalBot } from "../request/classify";
+import { isBrowserNavigation } from "../request/facts";
+import { normalRoutePath } from "../util/paths";
 
 export type BlockRule = "impersonator" | "serve_human" | "crawler" | "route";
 
-export const BLOCKED_BODY = "Not available to this client.";
-
 function matches(ua: string, contains: string[], exact: string[]): boolean {
   return ua !== "" && (exact.includes(ua) || contains.some((needle) => ua.includes(needle)));
-}
-
-/** Repeated slashes collapse and a trailing slash drops, on both sides of a match. */
-export function normalRoutePath(path: string): string {
-  const collapsed = path.replace(/\/{2,}/g, "/");
-  return collapsed.length > 1 && collapsed.endsWith("/") ? collapsed.slice(0, -1) : collapsed;
 }
 
 /** The rule for a path: an exact match beats any prefix, and a longer prefix beats a shorter one. */

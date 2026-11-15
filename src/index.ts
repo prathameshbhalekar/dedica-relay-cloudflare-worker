@@ -1,5 +1,6 @@
 /**
  * Dedica middleware: Cloudflare Worker (reference implementation of /middleware/README.md, protocol v1).
+ * How it is put together: worker.ts.
  *
  * One worker in front of your site that connects it to Dedica:
  *   - it proves it is installed: serves /.well-known/dedica.json and sends heartbeats;
@@ -12,18 +13,18 @@
  * origin. If Dedica is slow, down or misconfigured, your site is served as if this worker weren't there.
  */
 
-import { Edge } from "./edge";
-import type { Env } from "./types";
+import type { Env } from "./config";
+import { createWorker } from "./worker";
 
 // Only the default handler may be exported from this module: Workers treats other exports as entrypoints.
-const edge = new Edge();
+const worker = createWorker();
 
 export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    return edge.fetch(request, env, ctx);
+    return worker.fetch(request, env, ctx);
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(edge.heartbeat(env));
+    ctx.waitUntil(worker.heartbeat(env));
   },
 } satisfies ExportedHandler<Env>;

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { routeFor } from "../src/access";
-import { claimedAgent, identify, ipTier, parseCidr, parseIp, parseSignatureInput, verifiedSigner } from "../src/identity";
-import { sanitizePolicy } from "../src/policy";
-import type { Access, Policy, Verification } from "../src/types";
+import { routeFor } from "../src/decide/access";
+import { parseCidr, parseIp } from "../src/identity/ip";
+import { parseSignatureInput, verifiedSigner } from "../src/identity/signature";
+import { claimedAgent, identify, ipTier } from "../src/identity/verdict";
+import { sanitizePolicy } from "../src/policy/sanitize";
+import type { Access, Policy, Verification } from "../src/policy/types";
 import { API, BROWSER_UA, FakeCtx, GOOGLEBOT_UA, GPTBOT_UA, SITE, browserHeaders, env, eventBodies, get, harness, policy } from "./helpers";
 
 const NOW = Date.parse("2026-11-15T12:00:00Z");
@@ -53,9 +55,9 @@ function withAccess(a: Access | null, overrides: Partial<Policy> = {}): Policy {
 
 async function run(request: Request, p: Policy, options: Parameters<typeof harness>[0] = {}) {
   const h = harness({ policy: p, now: () => NOW, ...options });
-  await h.edge.policies.refresh(env);
+  await h.worker.policies.refresh(env);
   const ctx = new FakeCtx();
-  const res = await h.edge.fetch(request, env, ctx);
+  const res = await h.worker.fetch(request, env, ctx);
   await ctx.drain();
   return { res, events: eventBodies(h.events), originCalls: h.originCalls, calls: h.calls };
 }
@@ -335,8 +337,8 @@ describe("Agent Access on proxied paths (/ask, /mcp)", () => {
       [mcpCall({ "user-agent": "DedicaAgentGateway/0.1" }), access({ blockedAgentUa: ["gptbot"] })],
     ] as const) {
       const h = harness({ policy: proxied(a), now: () => NOW });
-      await h.edge.policies.refresh(env);
-      const res = await h.edge.fetch(request, env, new FakeCtx());
+      await h.worker.policies.refresh(env);
+      const res = await h.worker.fetch(request, env, new FakeCtx());
       expect(res.status, request.headers.get("user-agent") ?? "").not.toBe(403);
       expect(queryCalls(h.calls)).toHaveLength(1); // forwarded to Dedica's query API
     }

@@ -1,5 +1,5 @@
 /**
- * Recognising agents (ported from ref.js). The lists come from Dedica's policy, so recognition
+ * Recognising agents. The lists come from Dedica's policy, so recognition
  * improves without redeploying the worker.
  *
  * - Search engines, link previews and monitors (`traditionalBots`) always get the normal page:
@@ -8,7 +8,9 @@
  * - Known AI agents, signed agents and automated-looking clients may get Dedica's agent version.
  */
 
-import type { Detection, Twins } from "./types";
+import type { Detection, Twins } from "../policy/types";
+import { underPrefix } from "../util/paths";
+import { isBrowserNavigation, userAgent } from "./facts";
 
 interface Needle {
   n: string;
@@ -29,13 +31,6 @@ function needles(d: Detection): Needle[] {
   return indexed;
 }
 
-/** Longer user agents are cut before any matching, so a policy pattern never runs over an attacker-sized string. */
-export const UA_MATCH_MAX = 512;
-
-export function userAgent(headers: Headers): string {
-  return (headers.get("user-agent") ?? "").slice(0, UA_MATCH_MAX).toLowerCase();
-}
-
 /** The longest user-agent needle in the user agent, if any. */
 function longestNeedle(ua: string, d: Detection): Needle | undefined {
   return needles(d).find((x) => ua.includes(x.n));
@@ -44,11 +39,6 @@ function longestNeedle(ua: string, d: Detection): Needle | undefined {
 export function isTraditionalBot(ua: string, d: Detection): boolean {
   if (!ua) return false;
   return (d.traditionalBotsExact ?? []).includes(ua) || Boolean(longestNeedle(ua, d)?.traditional);
-}
-
-/** A person opening a page in a browser. */
-export function isBrowserNavigation(headers: Headers): boolean {
-  return headers.get("sec-fetch-mode") === "navigate" && headers.get("sec-fetch-dest") === "document";
 }
 
 const regexCache = new Map<string, RegExp | null>();
@@ -130,32 +120,8 @@ export function keepHumanPage(ua: string, d: Detection, asksQuestion: boolean): 
 
 /** The policy's include/exclude paths for agent versions of pages (by path prefix). */
 export function twinEligible(pathname: string, twins: Twins): boolean {
-  const matches = (p: string) => pathname === p || pathname.startsWith(p.endsWith("/") ? p : `${p}/`);
+  const matches = (p: string) => underPrefix(pathname, p);
   if ((twins.excludePaths ?? []).some(matches)) return false;
   const include = twins.includePaths ?? [];
   return include.length === 0 || include.some(matches);
 }
-
-const ASSET_RE = /\.(?:js|mjs|css|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|eot|map|webp|avif|mp4|webm|mp3|wav|pdf)$/i;
-
-/** Headers that mark an API call, a session, a partial download or a protocol switch: never a page read. */
-const NOT_A_PAGE_HEADERS = ["authorization", "cookie", "upgrade", "range", "x-requested-with"];
-const PAGE_DESTS = new Set(["document", "iframe", "frame"]);
-
-/**
- * Whether a request at a normal URL may get Dedica's agent version at all. Anything that looks like an API call or
- * a page's sub-request always gets the origin's answer, without asking Dedica: a static file, a request carrying
- * credentials, a cookie, a range or an upgrade, a browser's non-page fetch, or an `Accept` that asks for JSON
- * rather than a page.
- */
-export function negotiable(request: Request, pathname: string): boolean {
-  const h = request.headers;
-  if (ASSET_RE.test(pathname)) return false;
-  if (NOT_A_PAGE_HEADERS.some((name) => h.has(name))) return false;
-  const dest = h.get("sec-fetch-dest");
-  if (dest !== null && !PAGE_DESTS.has(dest)) return false;
-  const accept = (h.get("accept") ?? "").toLowerCase();
-  if (accept.includes("json") && !accept.includes("text/html") && !accept.includes("text/markdown")) return false;
-  return true;
-}
-

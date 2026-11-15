@@ -1,6 +1,7 @@
 import fixture from "./policy.fixture.json";
-import { Edge } from "../src/edge";
-import type { Ctx, Env, Policy } from "../src/types";
+import type { Ctx, Env } from "../src/config";
+import { createWorker } from "../src/worker";
+import type { Policy } from "../src/policy/types";
 
 export const API = "https://api.dedica.test";
 export const SITE = "https://shop.example";
@@ -46,7 +47,7 @@ export interface Call {
 
 type Handler = (url: URL, init?: RequestInit) => Response | Promise<Response>;
 
-/** An Edge whose Dedica and origin calls are fakes. Dedica's policy is `current`, served by default. */
+/** A worker whose Dedica and origin calls are fakes. Dedica's policy is `current`, served by default. */
 export function harness(
   options: {
     policy?: Policy | null;
@@ -54,6 +55,8 @@ export function harness(
     origin?: (request: Request) => Response;
     now?: () => number;
     events?: Handler;
+    /** Any other Dedica URL (proxy targets, ...). Without it they answer 500. */
+    dedica?: Handler;
     sleep?: (ms: number) => Promise<void>;
   } = {},
 ) {
@@ -62,7 +65,7 @@ export function harness(
   /** Traffic events the worker reported (kept apart from `calls`, which are serving traffic). */
   const events: Call[] = [];
   const state = { policy: options.policy === undefined ? policy() : options.policy, policyStatus: 200 };
-  const edge = new Edge({
+  const worker = createWorker({
     now: options.now,
     sleep: options.sleep ?? (() => Promise.resolve()),
     dedicaFetch: async (input, init) => {
@@ -79,7 +82,7 @@ export function harness(
       if (url.pathname.startsWith("/api/v1/middleware/serve/")) {
         return options.serve ? options.serve(url, init) : new Response("not found", { status: 404 });
       }
-      return new Response("unexpected", { status: 500 });
+      return options.dedica ? options.dedica(url, init) : new Response("unexpected", { status: 500 });
     },
     originFetch: async (request) => {
       originCalls.push(request);
@@ -87,7 +90,7 @@ export function harness(
       return new Response("origin page", { status: 200, headers: { "content-type": "text/html" } });
     },
   });
-  return { edge, calls, originCalls, events, state };
+  return { worker, calls, originCalls, events, state };
 }
 
 export function get(path: string, headers: Record<string, string> = {}, init: RequestInit = {}): Request {

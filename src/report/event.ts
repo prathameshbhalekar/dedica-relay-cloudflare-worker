@@ -1,5 +1,5 @@
 /**
- * Traffic reporting (protocol v1, section 7), after each response and never in the visitor's way.
+ * Traffic events (protocol v1, section 7): what is reported about a request. Sent by reporter.ts.
  *
  * - Every **page load** is reported: people, AI agents and bots alike. Static files (scripts, styles, images, fonts,
  *   media), the sub-requests a browser page makes (`Sec-Fetch-Dest` other than a document or frame) and prefetches
@@ -12,28 +12,18 @@
  *   and path only. Cookies and the token are never sent.
  */
 
-import type { BlockRule } from "./access";
-import { clientMatch, type ClientMatch } from "./detect";
-import type { Identity, Tier } from "./identity";
-import { EVENTS_TIMEOUT_MS, SERVED_HEADER, dedicaInit, dedicaUrl } from "./env";
-import type { FetchFn } from "./policy";
-import type { Ctx, Env, Policy } from "./types";
-
-/** What the worker did with a request. */
-export type Outcome =
-  | "proxied" // a path the policy proxies to Dedica (`/mcp`, `/ask`, ...)
-  | "artifact" // a file Dedica manages (`/llms.txt`, ...), from Dedica
-  | "artifact_origin" // a `fallback` file the origin has itself
-  | "blocked" // a file the policy blocks, or a bot the site's Agent Access rules block
-  | "twin" // an explicit markdown URL (`/pricing.md`)
-  | "negotiated" // the agent version of a normal page URL
-  | "human_page" // a search engine, preview or unknown crawler kept the normal page
-  | "origin"; // passed through to the origin
+import type { Env } from "../config";
+import type { BlockRule } from "../decide/access";
+import type { Category, Outcome } from "../decide/decision";
+import type { Identity, Tier } from "../identity/verdict";
+import type { Policy } from "../policy/types";
+import { SERVED_HEADER } from "../protocol";
+import { type ClientMatch, clientMatch } from "../request/classify";
 
 /** How the worker answered a request, turned into an event. */
 export interface Trace {
   outcome: Outcome;
-  category: "public" | "eligible" | null;
+  category: Category;
   /** The Agent Access rule that answered 403, if any. */
   blockRule?: BlockRule;
 }
@@ -70,31 +60,12 @@ export interface TrafficEvent {
   policy_version: string | null;
 }
 
-export const MAX_BATCH = 1000;
-export const MAX_AGE_MS = 5000;
-/** How many unsent events an isolate keeps while Dedica is unavailable. */
-export const MAX_BUFFERED = MAX_BATCH * 5;
-
 const USER_AGENT_MAX = 512;
 const PATH_MAX = 2048;
 const QUERY_MAX = 2048;
-const ASSET_EXTENSIONS = new Set([
-  "js", "mjs", "css", "map", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "ico",
-  "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3", "wav",
-]); // prettier-ignore
-const PAGE_DESTINATIONS = new Set(["document", "iframe", "frame"]);
 /** The only query parameters reported (plus the policy's question parameters): how a visit from an AI answer is attributed. */
 const KEEP_PARAMS = ["utm_source", "utm_medium", "utm_campaign", "ref", "source"];
 const REPORTED_HEADERS = ["accept", "accept-language", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-site"];
-
-/** Whether a request is a page load worth reporting: not a static file, a browser sub-request or a prefetch. */
-export function isReportable(url: URL, headers: Headers): boolean {
-  const dot = url.pathname.lastIndexOf(".");
-  if (dot > url.pathname.lastIndexOf("/") && ASSET_EXTENSIONS.has(url.pathname.slice(dot + 1).toLowerCase())) return false;
-  const dest = headers.get("sec-fetch-dest");
-  if (dest !== null && !PAGE_DESTINATIONS.has(dest)) return false;
-  return !`${headers.get("sec-purpose") ?? ""} ${headers.get("purpose") ?? ""}`.includes("prefetch");
-}
 
 function questionParams(policy: Policy | null): string[] {
   const names = policy?.twins?.questionParams;
@@ -191,67 +162,3 @@ export async function buildEvent(
   };
 }
 
-/** The isolate's batch of unsent events. One per Edge; flushed by size or after MAX_AGE_MS. */
-export class Reporter {
-  private buffer: TrafficEvent[] = [];
-  private flushPending = false;
-
-  constructor(
-    private readonly fetchFn: FetchFn,
-    private readonly sleep: (ms: number) => Promise<void>,
-  ) {}
-
-  get pending(): number {
-    return this.buffer.length;
-  }
-
-  /** Adds an event and makes sure it gets sent: now if the batch is full, else within MAX_AGE_MS. */
-  async add(event: TrafficEvent, env: Env, ctx: Ctx): Promise<void> {
-    this.buffer.push(event);
-    if (this.buffer.length >= MAX_BATCH) await this.flush(env);
-    else this.schedule(env, ctx);
-  }
-
-  private schedule(env: Env, ctx: Ctx): void {
-    if (this.flushPending) return;
-    this.flushPending = true;
-    ctx.waitUntil(
-      (async () => {
-        await this.sleep(MAX_AGE_MS);
-        this.flushPending = false;
-        await this.flush(env);
-      })(),
-    );
-  }
-
-  /** Sends one batch. Never throws; a batch Dedica can't take right now is kept for the next one. */
-  async flush(env: Env): Promise<void> {
-    if (this.buffer.length === 0) return;
-    const batch = this.buffer.slice(0, MAX_BATCH);
-    this.buffer = this.buffer.slice(MAX_BATCH);
-    try {
-      const response = await this.fetchFn(
-        dedicaUrl(env, "events"),
-        dedicaInit(env, EVENTS_TIMEOUT_MS, {
-          method: "POST",
-          headers: { "content-type": "application/x-ndjson", "x-dedica-batch-id": crypto.randomUUID() },
-          body: batch.map((event) => JSON.stringify(event)).join("\n"),
-        }),
-      );
-      if (response.status !== 202) {
-        console.warn(`[dedica] event batch ${response.status}: ${(await response.text().catch(() => "")).slice(0, 300)}`);
-      } else {
-        const body = (await response.json().catch(() => null)) as { accepted?: number; rejected?: number; errors?: unknown } | null;
-        if (body?.rejected) console.warn(`[dedica] events: ${body.accepted} accepted, ${body.rejected} rejected`, body.errors);
-      }
-      if (response.status === 429 || response.status === 503) this.requeue(batch);
-    } catch (err) {
-      console.warn(`[dedica] event batch request failed: ${err}`);
-      this.requeue(batch);
-    }
-  }
-
-  private requeue(batch: TrafficEvent[]): void {
-    this.buffer = batch.concat(this.buffer).slice(0, MAX_BUFFERED);
-  }
-}
